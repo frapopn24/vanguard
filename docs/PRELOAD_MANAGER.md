@@ -6,8 +6,13 @@ history stored by normal runs.
 
 ## Commands
 
-Run these commands from the VANGUARD repository root so the intended
-`victory.toml` is loaded.
+Build the release CLI first, then run these commands from the VANGUARD repository
+root so the intended `victory.toml` is loaded. Do not run the preloader while the
+game is active; both processes would compete for GPU compiler time and memory.
+
+```powershell
+cargo build --release -p victory
+```
 
 Show the current cache without changing it:
 
@@ -82,7 +87,9 @@ With the default Windows configuration:
 - `%LOCALAPPDATA%\victory\cache\preload-report.txt`: latest preload report.
 
 Use `VICTORY_CACHE_DIR` or `[paths].cache_dir` to choose another cache root.
-Use the same cache root for preloading and normal gameplay. The preload command
+Use the same cache root for preloading and normal gameplay. If the normal game
+launch is made from another working directory and therefore reads a different
+`victory.toml`, set `VICTORY_CACHE_DIR` explicitly in both PowerShell sessions. The preload command
 does not access or modify game saves.
 
 ## Reading the report
