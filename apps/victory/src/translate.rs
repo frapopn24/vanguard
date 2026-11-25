@@ -552,7 +552,7 @@ pub fn preload(
 
     let report_path = report_path.unwrap_or_else(|| cfg.cache_dir.join("preload-report.txt"));
     victory_core::ensure_outside_repo(&report_path)?;
-    if let Some(parent) = report_path.parent() {
+    if let Some(parent) = report_path.parent().filter(|p| !p.as_os_str().is_empty()) {
         std::fs::create_dir_all(parent)?;
     }
     std::fs::write(&report_path, &report)?;
