@@ -192,10 +192,11 @@ $env:VICTORY_PERFORMANCE = "1"
 The preset enables asynchronous submission/relay (late wait stage 3 with relay
 stage 2), parallel shader-write snapshots and comparisons, joining adjacent
 non-overlapping title-memory copies, and a 1 MiB threshold for putting large
-title-buffer copies in card memory. The existing card-memory budget remains
-512 MiB by default. Each corresponding `VICTORY_*` setting can override the
-preset explicitly; for example, set `VICTORY_WIDE_BACK=0` to turn off only
-that part. This preset is experimental: compare it with the default path on the
+title-buffer copies in card memory. The card-memory budget is raised
+from 512 MiB to at most 1 GiB; allocation still respects the live DXGI video
+memory budget and can be reduced with `VICTORY_CARD_BUFFERS_MB`. Each
+corresponding `VICTORY_*` setting can override the preset explicitly; for
+example, set `VICTORY_WIDE_BACK=0` to turn off only that part. This preset is experimental: compare it with the default path on the
 same scene and watch for rendering errors, hangs, or device removal. It does
 not guarantee higher FPS on every adapter. Do not combine it with
 `VICTORY_GPU_TIMING`, which deliberately disables asynchronous submission.
