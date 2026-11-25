@@ -311,7 +311,10 @@ pub(crate) fn alias(list: &HostList, placed: This, source: This) -> bool {
 /// is remapping may show a frame later. It never shows partly read.
 fn no_wait() -> bool {
     static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    *ON.get_or_init(|| std::env::var_os("VICTORY_TEXTURE_NO_WAIT").is_some_and(|v| v == "1"))
+    *ON.get_or_init(|| match std::env::var("VICTORY_TEXTURE_NO_WAIT") {
+        Ok(value) => value == "1",
+        Err(_) => crate::performance_mode(),
+    })
 }
 
 /// Since the last frame-rate line, with [`no_wait`]: refreshes that read

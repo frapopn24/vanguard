@@ -24,6 +24,41 @@ use crate::host::HostList;
 use crate::object::This;
 use crate::pipeline::host::HostPipeline;
 
+/// Per-frame limits for textures selected through a dynamically indexed
+/// descriptor heap. The performance preset deliberately makes this queue
+/// catch up more slowly so uploads cannot occupy most of a very slow frame.
+/// The trade-off is delayed texture availability while the queue drains.
+fn heap_texture_budget() -> (u64, u64, std::time::Duration, std::time::Duration) {
+    static BUDGET: std::sync::OnceLock<(u64, u64, std::time::Duration, std::time::Duration)> =
+        std::sync::OnceLock::new();
+    *BUDGET.get_or_init(|| {
+        let performance = crate::performance_mode();
+        let mb = |name: &str, default: u64| {
+            std::env::var(name)
+                .ok()
+                .and_then(|value| value.trim().parse::<u64>().ok())
+                .unwrap_or(default)
+                << 20
+        };
+        let millis = |name: &str, default: u64| {
+            std::env::var(name)
+                .ok()
+                .and_then(|value| value.trim().parse::<u64>().ok())
+                .unwrap_or(default)
+        };
+        let per_frame_mb = if performance { 48 } else { 192 };
+        let catching_up_mb = if performance { 96 } else { 512 };
+        let per_frame_ms = if performance { 60 } else { 250 };
+        let catching_up_ms = if performance { 120 } else { 1500 };
+        (
+            mb("VICTORY_HEAP_TEXTURES_MB", per_frame_mb),
+            mb("VICTORY_HEAP_TEXTURES_CATCHUP_MB", catching_up_mb),
+            std::time::Duration::from_millis(millis("VICTORY_HEAP_TEXTURES_MS", per_frame_ms)),
+            std::time::Duration::from_millis(millis("VICTORY_HEAP_TEXTURES_CATCHUP_MS", catching_up_ms)),
+        )
+    })
+}
+
 /// A root argument as the title set it.
 #[derive(Debug, Clone, Default)]
 enum Root {
@@ -1489,12 +1524,11 @@ impl State {
         if !*ON.get_or_init(|| std::env::var_os("VICTORY_HEAP_TEXTURES").is_none_or(|v| v != "0")) {
             return;
         }
-        /// Bytes of texture memory staged per frame, and while the queue is
-        /// long (the world's first minutes: over 20,000 slots, which at the
-        /// usual pace took three and a half minutes with the materials
-        /// black) as much more as `CATCH_UP` in all allows.
-        const PER_FRAME: u64 = 192 << 20;
-        const PER_FRAME_CATCHING_UP: u64 = 512 << 20;
+        // The performance preset reduces both the amount and the wall-time
+        // budget for this pass. Textures farther back in the queue can appear
+        // later, but this recording thread gets time back for other work.
+        let (per_frame, per_frame_catching_up, span, span_catching_up) =
+            heap_texture_budget();
         const LONG: u64 = 2_000;
         static FRAME: AtomicU64 = AtomicU64::new(u64::MAX);
         static SPENT: AtomicU64 = AtomicU64::new(0);
@@ -1552,15 +1586,12 @@ impl State {
             slot: 0,
         };
         // Also within a time per pass: the pass runs on a thread that
-        // records the frame, and making and staging 192 MB of textures took
-        // 1.6-2.2 s of each of the world's first twenty frames (run 20).
-        // The rest waits for the next frames, as it does past the bytes.
-        const SPAN: std::time::Duration = std::time::Duration::from_millis(250);
-        const SPAN_CATCHING_UP: std::time::Duration = std::time::Duration::from_millis(1500);
+        // records the frame. Keep the budget bounded even while catching up;
+        // the remaining textures stay queued for later frames.
         let (per_frame, span) = if census[0] > LONG && catching_up(std::time::Duration::ZERO) {
-            (PER_FRAME_CATCHING_UP, SPAN_CATCHING_UP)
+            (per_frame_catching_up, span_catching_up)
         } else {
-            (PER_FRAME, SPAN)
+            (per_frame, span)
         };
         let began = std::time::Instant::now();
         for (index, write) in due {
@@ -1701,7 +1732,7 @@ impl State {
                 host.texture_slot_recheck(index, frame, (at, len), crate::texture::fingerprint(at, len));
             }
         }
-        catching_up(began.elapsed().saturating_sub(SPAN));
+        catching_up(began.elapsed().saturating_sub(span));
     }
 
     /// For the frame listing, after a dropped dispatch's line: its group

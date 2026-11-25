@@ -183,6 +183,40 @@ by default (`VICTORY_LATE_WAIT`, `VICTORY_RELAY`, `VICTORY_WIDE_BACK`,
 `VICTORY_CARD_BUFFERS_MIN_MB`, `VICTORY_INPLACE`, `VICTORY_BVH_BUILDER`, ...).
 Each is described in a comment where it is read.
 
+For an experimental gameplay performance preset, set this **before** launching:
+
+```powershell
+$env:VICTORY_PERFORMANCE = "1"
+```
+
+The preset enables asynchronous submission/relay (late wait stage 3 with relay
+stage 2), parallel shader-write snapshots, comparisons and writeback merges,
+batches adjacent non-overlapping title-memory copies, combines repeated card
+memory hash passes, and uses a 1 MiB threshold for putting large title-buffer
+copies in card memory. The card-memory budget is raised
+from 512 MiB to at most 1 GiB; allocation still respects the live DXGI video
+memory budget and can be reduced with `VICTORY_CARD_BUFFERS_MB`.
+
+To protect frame time, the preset also avoids blocking texture refreshes while
+the title remaps memory and limits bindless texture uploads to 48 MiB / 60 ms
+per frame (96 MiB / 120 ms while catching up), rather than 192 MiB / 250 ms
+(512 MiB / 1.5 s while catching up). This is an intentional visual trade-off:
+some dynamically indexed textures can appear later while their upload queue
+drains. Override these limits with `VICTORY_HEAP_TEXTURES_MB`,
+`VICTORY_HEAP_TEXTURES_MS`, `VICTORY_HEAP_TEXTURES_CATCHUP_MB` and
+`VICTORY_HEAP_TEXTURES_CATCHUP_MS`; set `VICTORY_TEXTURE_NO_WAIT=0` to restore
+blocking texture refreshes.
+
+Each corresponding `VICTORY_*` setting can override the preset explicitly;
+for example, set `VICTORY_WIDE_BACK=0` to turn off only that part. This preset
+is experimental: compare it with the default path on the same scene and watch
+for rendering errors, hangs, or device removal. For an even more aggressive
+diagnostic trade-off, `VICTORY_HEAP_TEXTURES=0` disables the preparation pass
+for dynamically indexed textures entirely; expect many such materials to be
+missing. This is not part of the default preset. The preset does not guarantee
+higher FPS on every adapter. Do not combine it with `VICTORY_GPU_TIMING`, which
+deliberately disables asynchronous submission.
+
 ### Known problems
 
 - Everything in shadow is black (see above).
