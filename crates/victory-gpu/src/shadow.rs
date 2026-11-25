@@ -151,7 +151,8 @@ fn card_limits() -> (u64, u64) {
         let mb = |name: &str, default: u64| {
             std::env::var(name).ok().and_then(|v| v.trim().parse::<u64>().ok()).unwrap_or(default) << 20
         };
-        (mb("VICTORY_CARD_BUFFERS_MIN_MB", 16).max(1 << 20), mb("VICTORY_CARD_BUFFERS_MB", 512))
+        let min_default = if crate::performance_mode() { 1 } else { 16 };
+        (mb("VICTORY_CARD_BUFFERS_MIN_MB", min_default).max(1 << 20), mb("VICTORY_CARD_BUFFERS_MB", 512))
     })
 }
 
@@ -470,7 +471,13 @@ mod card_tests {
 ///   had not received from bytes the card wrote.
 pub(crate) fn relay() -> bool {
     static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    *ON.get_or_init(|| std::env::var("VICTORY_RELAY").is_ok_and(|v| v == "1" || v == "2") && !keeps())
+    *ON.get_or_init(|| {
+        let enabled = match std::env::var("VICTORY_RELAY") {
+            Ok(value) => value == "1" || value == "2",
+            Err(_) => crate::performance_mode(),
+        };
+        enabled && !keeps()
+    })
 }
 
 /// The submission being prepared (its number among those started): what
@@ -958,7 +965,10 @@ unsafe fn copy_wide(src: *const u8, dst: *mut u8, len: usize) {
 /// lists only afterwards).
 pub(crate) fn wide_back() -> bool {
     static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    *ON.get_or_init(|| std::env::var_os("VICTORY_WIDE_BACK").is_some_and(|v| v == "1"))
+    *ON.get_or_init(|| match std::env::var("VICTORY_WIDE_BACK") {
+        Ok(value) => value == "1",
+        Err(_) => crate::performance_mode(),
+    })
 }
 
 type Job = Box<dyn FnOnce() + Send>;
