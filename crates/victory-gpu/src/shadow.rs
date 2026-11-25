@@ -58,6 +58,39 @@ impl PendingRanges {
         }
     }
 
+    /// Joins adjacent segments with equal reference counts around a change.
+    fn coalesce_at(&mut self, at: usize) {
+        let Some((&mut_start, _)) = self.covered.range(..=at).next_back() else {
+            return;
+        };
+        let mut start = mut_start;
+        if let Some((&before, previous)) = self.covered.range(..start).next_back() {
+            let current = self.covered[&start];
+            if previous.end == start && previous.references == current.references {
+                self.covered.get_mut(&before).expect("previous segment found").end = current.end;
+                self.covered.remove(&start);
+                start = before;
+            }
+        }
+        loop {
+            let current = self.covered[&start];
+            let next = self
+                .covered
+                .range((std::ops::Bound::Excluded(start), std::ops::Bound::Unbounded))
+                .next()
+                .map(|(&next_start, &next)| (next_start, next));
+            match next {
+                Some((next_start, next))
+                    if current.end == next_start && current.references == next.references =>
+                {
+                    self.covered.get_mut(&start).expect("current segment found").end = next.end;
+                    self.covered.remove(&next_start);
+                }
+                _ => break,
+            }
+        }
+    }
+
     /// Adds or removes one declaration's coverage over a clipped range.
     fn adjust_coverage(&mut self, (start, end): (usize, usize), add: bool) {
         if start >= end {
@@ -105,6 +138,8 @@ impl PendingRanges {
                 }
             }
         }
+        self.coalesce_at(start);
+        self.coalesce_at(end);
     }
 
     /// The new bytes in [from, to) not already covered, as offsets from base.
@@ -150,7 +185,14 @@ impl PendingRanges {
             std::ops::Bound::Excluded(from),
             std::ops::Bound::Excluded(to),
         )) {
-            busy.push((start, segment.end.min(to)));
+            let end = segment.end.min(to);
+            if let Some(last) = busy.last_mut()
+                && last.1 == start
+            {
+                last.1 = end;
+            } else {
+                busy.push((start, end));
+            }
         }
         busy
     }
@@ -3397,6 +3439,21 @@ mod pending_range_tests {
         assert!(pending.is_empty());
         assert!(pending.covered.is_empty());
         assert!(pending.intersections(60, 70).is_empty());
+    }
+
+    #[test]
+    fn removing_temporary_overlap_coalesces_the_original_interval() {
+        let mut pending = PendingRanges::default();
+        let original = (0, 100);
+        let temporary = (25, 75);
+        assert!(pending.insert(original));
+        pending.adjust_coverage(original, true);
+        assert!(pending.insert(temporary));
+        pending.adjust_coverage(temporary, true);
+        pending.remove(&[temporary], (0, usize::MAX));
+        assert_eq!(pending.covered.len(), 1);
+        let segment = pending.covered.get(&0).unwrap();
+        assert_eq!((segment.end, segment.references), (100, 1));
     }
 
     #[test]
