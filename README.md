@@ -190,9 +190,10 @@ $env:VICTORY_PERFORMANCE = "1"
 ```
 
 The preset enables asynchronous submission/relay (late wait stage 3 with relay
-stage 2), parallel shader-write snapshots and comparisons, joining adjacent
-non-overlapping title-memory copies, and a 1 MiB threshold for putting large
-title-buffer copies in card memory. The card-memory budget is raised
+stage 2), parallel shader-write snapshots, comparisons and writeback merges,
+batches adjacent non-overlapping title-memory copies, combines repeated card
+memory hash passes, and uses a 1 MiB threshold for putting large title-buffer
+copies in card memory. The card-memory budget is raised
 from 512 MiB to at most 1 GiB; allocation still respects the live DXGI video
 memory budget and can be reduced with `VICTORY_CARD_BUFFERS_MB`.
 
