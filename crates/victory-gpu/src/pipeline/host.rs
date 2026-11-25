@@ -1006,8 +1006,8 @@ mod tests {
         }
     }
 
-    /// A mesh pipeline made once is loaded from the library the next time,
-    /// not compiled again (a stream without a topology never loads).
+    // A mesh pipeline made once is loaded from the library the next time,
+    // not compiled again (a stream without a topology never loads).
 
     /// A pipeline with the depth bounds test is made, and loads again.
     #[test]

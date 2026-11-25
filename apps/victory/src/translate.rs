@@ -520,7 +520,7 @@ pub fn preload(
     let _ = writeln!(report, "without_dxil        {}", without_dxil.load(Ordering::Relaxed));
     let _ = writeln!(report, "native_decode_errors {}", native_errors.load(Ordering::Relaxed));
     let _ = writeln!(report, "unsupported_stages  {}", unsupported_stages.load(Ordering::Relaxed));
-    let _ = writeln!(report, "");
+    let _ = writeln!(report);
     let _ = writeln!(report, "SHADER TRANSLATIONS");
     for (i, name) in STAGES.iter().enumerate() {
         let _ = writeln!(
@@ -530,31 +530,31 @@ pub fn preload(
             refused[i].load(Ordering::Relaxed)
         );
     }
-    let _ = writeln!(report, "");
+    let _ = writeln!(report);
     let _ = writeln!(report, "COMPUTE PIPELINES");
     let _ = writeln!(report, "requested            {}", compute_requested.load(Ordering::Relaxed));
     let _ = writeln!(report, "ready                {}", compute_ready.load(Ordering::Relaxed));
     let _ = writeln!(report, "refused              {}", compute_refused.load(Ordering::Relaxed));
     let _ = writeln!(report, "left_out             {}", compute_left_out.load(Ordering::Relaxed));
-    let _ = writeln!(report, "");
+    let _ = writeln!(report);
     let _ = writeln!(report, "CACHE ACTIVITY");
     let _ = writeln!(report, "translated_cache_hits   {shader_hits}");
     let _ = writeln!(report, "translated_cache_misses {shader_misses}");
     let _ = writeln!(report, "host_psos_loaded        {psos_loaded}");
     let _ = writeln!(report, "host_psos_created       {psos_created}");
     let _ = writeln!(report, "host_psos_started_early {psos_started_early}");
-    let _ = writeln!(report, "");
+    let _ = writeln!(report);
     let _ = writeln!(report, "GRAPHICS PSO NOTE");
     let _ = writeln!(report, "Graphics PSOs require the title's complete root signature, render-target formats");
     let _ = writeln!(report, "and fixed-function state. Learned graphics keys are started early when the title");
     let _ = writeln!(report, "recreates their matching pipeline objects; shader-only offline scan cannot invent them.");
-    let _ = writeln!(report, "");
+    let _ = writeln!(report);
     let _ = writeln!(report, "FAILED SHADER HASHES");
     let failed_hashes = failed_hashes.into_inner().unwrap_or_else(|e| e.into_inner());
     for item in failed_hashes.iter().take(200) {
         let _ = writeln!(report, "{item}");
     }
-    let _ = writeln!(report, "");
+    let _ = writeln!(report);
     let _ = writeln!(report, "FAILURES");
     let mut failures = failures.into_inner().unwrap_or_else(|e| e.into_inner()).into_iter().collect::<Vec<_>>();
     failures.sort_by_key(|(_, count)| std::cmp::Reverse(*count));
