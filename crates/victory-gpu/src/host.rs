@@ -1775,7 +1775,15 @@ pub(crate) fn relay() -> bool {
 /// both wait for everything.
 fn relay_exact() -> bool {
     static ON: OnceLock<bool> = OnceLock::new();
-    *ON.get_or_init(|| relay() && std::env::var_os("VICTORY_RELAY").is_some_and(|v| v == "2"))
+    *ON.get_or_init(|| {
+        if !relay() || late_stage() <= 1 {
+            return false;
+        }
+        match std::env::var("VICTORY_RELAY") {
+            Ok(value) => value == "2",
+            Err(_) => crate::performance_mode(),
+        }
+    })
 }
 
 /// Told when something joins [`LINE`], for the thread that lands flights
@@ -2589,7 +2597,10 @@ mod late_tests {
 /// only the copy that held it did.
 fn join_copies() -> bool {
     static ON: OnceLock<bool> = OnceLock::new();
-    *ON.get_or_init(|| std::env::var_os("VICTORY_JOIN_COPIES").is_some_and(|v| v == "1"))
+    *ON.get_or_init(|| match std::env::var("VICTORY_JOIN_COPIES") {
+        Ok(value) => value == "1",
+        Err(_) => crate::performance_mode(),
+    })
 }
 
 /// Since the last frame-rate line: title buffer copies recorded, and those
