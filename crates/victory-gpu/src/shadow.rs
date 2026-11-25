@@ -121,17 +121,21 @@ impl PendingRanges {
 
     /// Removes declarations whose last flight has completed, then rebuilds
     /// the union from the remaining exact ranges.
-    fn remove(&mut self, ranges: &[(usize, usize)]) {
+    fn remove(&mut self, ranges: &[(usize, usize)], bounds: (usize, usize)) {
         if ranges.is_empty() {
             return;
         }
         let remove: HashSet<(usize, usize)> = ranges.iter().copied().collect();
+        let previous = self.ranges.len();
         self.ranges.retain(|range| !remove.contains(range));
+        if self.ranges.len() == previous {
+            return;
+        }
         self.exact.retain(|range| !remove.contains(range));
         self.covered.clear();
         self.ranges.sort_unstable();
         for &(start, end) in &self.ranges {
-            self.cover((start, end));
+            self.cover((start.max(bounds.0), end.min(bounds.1)));
         }
     }
 
@@ -2232,9 +2236,9 @@ impl Shadow {
         let mut pending = self.pending.lock().unwrap_or_else(|e| e.into_inner());
         if relay() {
             let free = self.flights.lock().unwrap_or_else(|e| e.into_inner()).done(ranges);
-            pending.remove(&free);
+            pending.remove(&free, (self.start as usize, (self.start + self.len) as usize));
         } else {
-            pending.remove(ranges);
+            pending.remove(ranges, (self.start as usize, (self.start + self.len) as usize));
         }
         if !pending.is_empty() || self.card.is_some() {
             return;
@@ -3310,7 +3314,7 @@ mod pending_range_tests {
         pending.cover((100, 120));
         pending.cover((130, 140));
         assert_eq!(pending.uncovered(110, 135, 100), vec![(20, 30)]);
-        assert_eq!(pending.uncovered(105, 115, 100), vec![]);
+        assert!(pending.uncovered(105, 115, 100).is_empty());
         assert_eq!(pending.uncovered(120, 130, 100), vec![(20, 30)]);
     }
 
@@ -3323,7 +3327,7 @@ mod pending_range_tests {
         pending.cover(first);
         assert!(pending.insert(second));
         pending.cover(second);
-        pending.remove(&[first]);
+        pending.remove(&[first], (0, usize::MAX));
         assert_eq!(pending.intersections(105, 115), vec![(110, 115)]);
         assert_eq!(pending.ranges, vec![second]);
         assert!(pending.exact.contains(&second));
@@ -3336,7 +3340,7 @@ mod pending_range_tests {
         let range = (50, 90);
         assert!(pending.insert(range));
         pending.cover(range);
-        pending.remove(&[range]);
+        pending.remove(&[range], (0, usize::MAX));
         assert!(pending.is_empty());
         assert!(pending.covered.is_empty());
         assert!(pending.intersections(60, 70).is_empty());
