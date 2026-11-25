@@ -143,7 +143,8 @@ pub(crate) fn cards() -> bool {
 /// most bytes of such copies (their "before" twins not counted: a copy
 /// shaders write takes its size twice), both in bytes:
 /// `VICTORY_CARD_BUFFERS_MIN_MB` (16 normally, 1 with `VICTORY_PERFORMANCE=1`) and
-/// `VICTORY_CARD_BUFFERS_MB` (512). Explicit values override the preset.
+/// `VICTORY_CARD_BUFFERS_MB` (512 normally, 1024 with the preset). Explicit
+/// values override the preset; the live DXGI budget check still applies.
 /// Run 69's gameplay has ten title buffers of 16 MiB or more, 494 MB, and
 /// 1,650 MB of the card's budget free.
 fn card_limits() -> (u64, u64) {
@@ -152,8 +153,13 @@ fn card_limits() -> (u64, u64) {
         let mb = |name: &str, default: u64| {
             std::env::var(name).ok().and_then(|v| v.trim().parse::<u64>().ok()).unwrap_or(default) << 20
         };
-        let min_default = if crate::performance_mode() { 1 } else { 16 };
-        (mb("VICTORY_CARD_BUFFERS_MIN_MB", min_default).max(1 << 20), mb("VICTORY_CARD_BUFFERS_MB", 512))
+        let performance = crate::performance_mode();
+        let min_default = if performance { 1 } else { 16 };
+        let max_default = if performance { 1024 } else { 512 };
+        (
+            mb("VICTORY_CARD_BUFFERS_MIN_MB", min_default).max(1 << 20),
+            mb("VICTORY_CARD_BUFFERS_MB", max_default),
+        )
     })
 }
 
