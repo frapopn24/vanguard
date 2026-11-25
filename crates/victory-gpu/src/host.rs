@@ -1503,7 +1503,10 @@ void main(uint3 id : SV_DispatchThreadID) {
 /// a fetch that finds nothing and loses no shader write.
 fn rehash_runs() -> bool {
     static ON: OnceLock<bool> = OnceLock::new();
-    *ON.get_or_init(|| std::env::var_os("VICTORY_CARD_REHASH_RUNS").is_some_and(|v| v == "1"))
+    *ON.get_or_init(|| match std::env::var("VICTORY_CARD_REHASH_RUNS") {
+        Ok(value) => value == "1",
+        Err(_) => crate::performance_mode(),
+    })
 }
 
 /// Since the last frame-rate line, of our own passes over copies in the
@@ -1521,7 +1524,10 @@ static CARD_PASSES: [std::sync::atomic::AtomicU64; 3] = [const { std::sync::atom
 /// so eight threads take an eighth of them each.
 fn wide_merge() -> bool {
     static ON: OnceLock<bool> = OnceLock::new();
-    *ON.get_or_init(|| std::env::var_os("VICTORY_WIDE_MERGE").is_some_and(|v| v == "1"))
+    *ON.get_or_init(|| match std::env::var("VICTORY_WIDE_MERGE") {
+        Ok(value) => value == "1",
+        Err(_) => crate::performance_mode(),
+    })
 }
 
 /// One declared range of a copy in the card's memory, in a submission.
@@ -1775,7 +1781,15 @@ pub(crate) fn relay() -> bool {
 /// both wait for everything.
 fn relay_exact() -> bool {
     static ON: OnceLock<bool> = OnceLock::new();
-    *ON.get_or_init(|| relay() && std::env::var_os("VICTORY_RELAY").is_some_and(|v| v == "2"))
+    *ON.get_or_init(|| {
+        if !relay() || late_stage() <= 1 {
+            return false;
+        }
+        match std::env::var("VICTORY_RELAY") {
+            Ok(value) => value == "2",
+            Err(_) => crate::performance_mode(),
+        }
+    })
 }
 
 /// Told when something joins [`LINE`], for the thread that lands flights
@@ -2571,7 +2585,7 @@ mod late_tests {
 
 /// Whether a title buffer copy that continues the one recorded before it
 /// in its list becomes one step with it (`VICTORY_JOIN_COPIES=1`; off by
-/// default).
+/// default unless `VICTORY_PERFORMANCE=1`).
 ///
 /// Each copy is done at submission through the kernel, which reports a
 /// page that is not there instead of faulting (`copy_mapped`), tells the
@@ -2589,7 +2603,10 @@ mod late_tests {
 /// only the copy that held it did.
 fn join_copies() -> bool {
     static ON: OnceLock<bool> = OnceLock::new();
-    *ON.get_or_init(|| std::env::var_os("VICTORY_JOIN_COPIES").is_some_and(|v| v == "1"))
+    *ON.get_or_init(|| match std::env::var("VICTORY_JOIN_COPIES") {
+        Ok(value) => value == "1",
+        Err(_) => crate::performance_mode(),
+    })
 }
 
 /// Since the last frame-rate line: title buffer copies recorded, and those
