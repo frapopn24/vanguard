@@ -1,83 +1,62 @@
-# VIctory fork (work in progress)
+# Victory AMD — Community Development Fork
 
-## This branch: victory-amd + a DirectStorage read fix
+[![Based on JoshuuDev/victory-amd](https://img.shields.io/badge/base-JoshuuDev%2Fvictory--amd-2563eb?logo=github&logoColor=white)](https://github.com/JoshuuDev/victory-amd)
+[![License: GPL-3.0-or-later](https://img.shields.io/badge/license-GPL--3.0--or--later-blue.svg)](LICENSE)
+[![Status: experimental](https://img.shields.io/badge/status-experimental-orange.svg)](#current-status)
 
-A fork of [myokex/victory-amd](https://github.com/myokex/victory-amd) at `070df42`
-with one change on top (on this fork's `victory-amd` branch, and on `fix-dstorage-guard-race`):
+**An independent community fork of [JoshuuDev/victory-amd](https://github.com/JoshuuDev/victory-amd), focused on graphics compatibility, resource handling, performance profiling, and gameplay correctness.**
 
-- **Kernel reads into title memory are read beside and copied in.** With the guard
-  over all the views of a page (on by default in `070df42`), a raw DirectStorage
-  request could fail with `ERROR_INVALID_USER_BUFFER` (`0x800706f8`) and the title
-  stopped itself seconds after the world's first frame: 2 runs out of 2. Those reads
-  now land in a buffer and are copied in from user mode, where the guard takes the
-  write; `fread` does the same. With the fix and the guard on, a run went 5.5 minutes
-  past the world's first frame without a failed request.
+This repository is not the original project and is not an official release. It exists to coordinate experiments and improvements on top of JoshuuDev's AMD-focused Victory fork. Please visit and credit the upstream project: **[github.com/JoshuuDev/victory-amd](https://github.com/JoshuuDev/victory-amd)**.
 
-Tested on one machine only: Windows 11, Radeon RX 7800 XT 16 GB (driver
-32.0.32015.7029), Ryzen 7 7700X, 32 GB RAM, Series X profile. Other GPUs,
-NVIDIA's especially, may behave differently.
+> [!IMPORTANT]
+> This is experimental compatibility-layer software. Results vary by GPU, driver, game build, and configuration. Rendering progress does not mean the game is fully playable. Expect missing features, low frame rates, crashes, and incomplete gameplay behavior.
 
-**No game files, code or assets are here, and none are shared.** Shaders are
-translated on your machine from your own copy of the game.
+## Current status
 
-### Reproducing the check run
+The latest locally reported test on the maintainer's system reached **Chapter 1**. Character faces and most observed textures were rendering correctly, with roughly **3–5 FPS** in that session. The boat sequence currently has a water/vehicle interaction failure that causes the mission to end. The cause has **not** been established; it may involve missing GPU work, game-side compatibility, or another subsystem.
 
-1. Install Git, Visual Studio Build Tools (MSVC C++ workload and a Windows 10/11 SDK),
-   [rustup](https://rustup.rs), and a current GPU driver. The pinned Rust toolchain is
-   installed by itself on the first build.
-2. Get the code and set up the config:
+These are observations from one experimental setup, not independently reproduced results or a claim of general compatibility. See [the team workstreams](docs/TEAM_TASKS.md) for the current investigation areas.
 
-   ```powershell
-   git clone https://github.com/JoshuaO22/victory-amd
-   cd victory-amd
-   copy victory.example.toml victory.toml   # set game_dir to your own dump, outside the repo
-   cargo test --workspace                   # optional; needs no game data
-   cargo build --profile diag -p victory --features diagnostics
-   ```
+## What this fork is working on
 
-3. **Recommended, about 4 minutes: translate the shaders ahead of time.** Without it,
-   each shader is translated the first time the title uses it, and what it draws is
-   left out until then: the opening cutscene and the world's first minutes show missing
-   objects and effects, and run slower. With it, every shader is ready from the first
-   frame. The translations are made on your machine from your own copy of the game, and
-   are kept in the cache for later runs. Use the same build as the runs (the cache key
-   includes it) and no shader-related `VICTORY_*` switches:
+- **Shader translation:** support for additional shader instructions and pipeline creation failures.
+- **Resource handling:** descriptor heaps, texture views, streaming, and memory correctness.
+- **Performance:** CPU submission overhead, GPU workload, synchronization, and memory transfers.
+- **Gameplay compatibility:** investigate water, vehicle, collision, and other mission-critical behavior.
 
-   ```powershell
-   target\diag\victory.exe warm
-   ```
+## Getting started
 
-   Run it again after updating this repository: a change to the translator makes the
-   cached translations stale, and they are made again.
+This project builds from source. Follow the build instructions and configuration requirements in the technical notes below. Use your own legally obtained game files; keep game data, extracted assets, shader caches, save data, and local configuration outside this repository.
 
-4. Run the title with a fresh data folder and a log:
+```powershell
+git clone https://github.com/frapopn24/victorious.git
+cd victorious
+cargo test --workspace
+cargo build --profile diag -p victory --features diagnostics
+```
 
-   ```powershell
-   $env:VICTORY_LOG = 'info'
-   $env:VICTORY_DATA_DIR = 'D:\victory-data\check-1'   # any new folder outside the repo
-   Start-Process target\diag\victory.exe -NoNewWindow -Wait -RedirectStandardError check-1.log `
-     -ArgumentList 'run', '"<game dir>\<the title''s exe>"', '--execute', '--console', 'series-x'
-   ```
+The commands above are a starting point, not a guarantee that every environment is ready to run the title. Review the detailed setup instructions below before launching.
 
-   Go through the first-time setup and legal screens with a controller; they do not
-   advance by themselves. The test window is the first minutes after the story's world
-   starts loading. Let it run about 7 minutes, then close it.
-5. Passed if `VICTORY_DATA_DIR\<title id>\crashes.log` does not exist and the log has no
-   `dstorage: request failed` line. The log names the world's start in a line with
-   `the first frame of 500 draws or more`. Without the fix, the same run stops within
-   about 25 seconds of that line.
+## Contributing
 
-To repeat it without a controller: copy `saves` and `storage` from the data folder of a run
-stopped before the first autosave into a new data folder. Setup and legal screens are then
-done, and the story starts from the beginning again.
+Contributions are welcome. Please read [CONTRIBUTING.md](CONTRIBUTING.md) and choose a focused task from [docs/TEAM_TASKS.md](docs/TEAM_TASKS.md). Use feature branches and submit pull requests into `team-integration`; do not push experimental changes directly to the baseline branch.
 
-## victory-amd
+## Project links
 
-This copy is a fork of
-[fxceless/victory-fork](https://github.com/fxceless/victory-fork), itself a fork
-of [VIctory](https://github.com/Marvisak/VIctory). It adds fixes found while
-running on an AMD card, tested on one machine only: Windows 11, Radeon RX 7800 XT
-16 GB (driver 32.0.32029.2010), Ryzen 5 7500F, 32 GB RAM.
+- **Upstream base:** [JoshuuDev/victory-amd](https://github.com/JoshuuDev/victory-amd)
+- **Original VIctory project:** [Marvisak/VIctory](https://github.com/Marvisak/VIctory)
+- **Team workstreams:** [docs/TEAM_TASKS.md](docs/TEAM_TASKS.md)
+- **Contribution guide:** [CONTRIBUTING.md](CONTRIBUTING.md)
+
+## Credits and relationship to upstream
+
+This repository is an independent fork. It builds on work by JoshuuDev and the contributors to the projects in its technical lineage. Keep upstream notices, license terms, and attribution intact when modifying or redistributing code. This project is not affiliated with or endorsed by the game's developer or publisher.
+
+---
+
+## Technical lineage and implementation notes
+
+The current community codebase is based on [JoshuuDev/victory-amd](https://github.com/JoshuuDev/victory-amd). Its wider technical lineage includes [victory-fork](https://github.com/fxceless/victory-fork) and the original [VIctory](https://github.com/Marvisak/VIctory). This repository keeps those upstream origins and contributor credits visible. Historical hardware notes below describe earlier upstream testing, not a guarantee for every system.
 
 State on that machine (2026-11-25, Series X profile): the prologue's cutscene and
 the first room are drawn, with the player moving, at 2 to 3 frames per second.
