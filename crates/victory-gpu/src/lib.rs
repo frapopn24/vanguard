@@ -56,6 +56,15 @@ mod texture;
 #[cfg(windows)]
 mod watch;
 
+/// Whether the opt-in performance preset is enabled. Individual
+/// performance-related environment variables take precedence over this
+/// preset in the settings that consume them.
+#[cfg(windows)]
+pub(crate) fn performance_mode() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| std::env::var_os("VICTORY_PERFORMANCE").is_some_and(|v| v == "1"))
+}
+
 #[cfg(windows)]
 pub use host::on_failure;
 #[cfg(windows)]
