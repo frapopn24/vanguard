@@ -26,16 +26,30 @@ These are observations from one experimental setup, not independently reproduced
 
 ## Getting started
 
-This project builds from source. Follow the build instructions and configuration requirements in the technical notes below. Use your own legally obtained game files; keep game data, extracted assets, shader caches, save data, and local configuration outside this repository.
+This project builds from source on Windows. Use your own legally obtained game files. Keep game data, extracted assets, shader caches, save data, and the local `victory.toml` configuration outside Git; the local config file is ignored by Git.
+
+For a fresh clone:
 
 ```powershell
-git clone https://github.com/frapopn24/victorious.git
-cd victorious
+git clone https://github.com/frapopn24/vanguard.git
+cd vanguard
+
+# Create the local config once, then edit [paths].game_dir.
+Copy-Item .\victory.example.toml .\victory.toml
+notepad .\victory.toml
+
 cargo test --workspace
 cargo build --profile diag -p victory --features diagnostics
+
+# Check the resolved paths before launching.
+.\target\diag\victory.exe config
 ```
 
-The commands above are a starting point, not a guarantee that every environment is ready to run the title. Review the detailed setup instructions below before launching.
+Set `[paths].game_dir` in `victory.toml` to your game directory. The example file contains a placeholder path; replace it with the real location. Environment variables such as `VICTORY_GAME_DIR` override values in the file, so leave them unset unless you intentionally want an override.
+
+**Important:** `victory config` checks the configured directories, but `victory run` still requires the full path to the title's actual executable as its argument. It does not guess the executable filename from `game_dir`. See [docs/STARTUP.md](docs/STARTUP.md) for the complete PowerShell launch and diagnostics-capture instructions.
+
+The commands above are a starting point, not a guarantee that every environment is ready to run the title. Review the requirements and asset-policy notes below before launching.
 
 ## Contributing
 
@@ -244,12 +258,19 @@ cargo test --workspace                   # needs no game data
 cargo run -p victory -- config           # check your paths
 ```
 
-Run the title:
+Run the title from the repository root. The executable argument must be the full path to the title's actual executable; do not substitute the game directory itself or assume a particular executable filename:
 
 ```powershell
 cargo build --release -p victory
-target\release\victory.exe run <game dir>\<the title's exe> --execute
+$gameExe = Read-Host "Full path to the title executable"
+if (-not (Test-Path -LiteralPath $gameExe -PathType Leaf)) {
+    throw "Executable not found: $gameExe"
+}
+$gameExe = (Resolve-Path -LiteralPath $gameExe).Path
+& ".\target\release\victory.exe" run $gameExe --execute --console series-x
 ```
+
+For the diagnostics build and frame-operation capture, see [docs/STARTUP.md](docs/STARTUP.md).
 
 The window caption shows the framerate. Saves, settings and `crashes.log`
 are kept under the data folder (default `%LOCALAPPDATA%\victory\data`), derived
