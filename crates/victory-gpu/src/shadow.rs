@@ -15,7 +15,7 @@
 //! descriptors, buffer views in tables); buffers read through directly
 //! indexed heaps keep what their first use copied.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashSet};
 use std::sync::atomic::{AtomicU8, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
@@ -23,6 +23,122 @@ use windows::Win32::Graphics::Direct3D12::ID3D12Resource;
 
 use crate::host::{HostList, host};
 use crate::watch::PAGE;
+
+/// Exact shader-write ranges plus a merged interval index for overlap checks.
+///
+/// `ranges` preserves the exact declarations used by flight accounting and
+/// copy-back completion. `covered` is their union, so queries and snapshot
+/// subtraction do not repeatedly scan every declaration.
+#[derive(Default)]
+struct PendingRanges {
+    ranges: Vec<(usize, usize)>,
+    exact: HashSet<(usize, usize)>,
+    covered: BTreeMap<usize, usize>,
+}
+
+impl PendingRanges {
+    /// Records an exact declaration once.
+    fn insert(&mut self, range: (usize, usize)) -> bool {
+        if !self.exact.insert(range) {
+            return false;
+        }
+        self.ranges.push(range);
+        true
+    }
+
+    /// Adds a range to the sorted, disjoint union (merging touching ranges).
+    fn cover(&mut self, (mut start, mut end): (usize, usize)) {
+        if start >= end {
+            return;
+        }
+        if let Some((&before, &before_end)) = self.covered.range(..=start).next_back()
+            && before_end >= start
+        {
+            start = before;
+            end = end.max(before_end);
+            self.covered.remove(&before);
+        }
+        loop {
+            let next = self.covered.range(start..).next().map(|(&a, &e)| (a, e));
+            match next {
+                Some((next_start, next_end)) if next_start <= end => {
+                    self.covered.remove(&next_start);
+                    end = end.max(next_end);
+                }
+                _ => break,
+            }
+        }
+        self.covered.insert(start, end);
+    }
+
+    /// The new bytes in [from, to) not already covered, as offsets from base.
+    fn uncovered(&self, from: usize, to: usize, base: usize) -> Vec<(usize, usize)> {
+        let mut parts = Vec::new();
+        if from >= to {
+            return parts;
+        }
+        let mut at = from;
+        if let Some((_, &end)) = self.covered.range(..=from).next_back() {
+            at = at.max(end.min(to));
+        }
+        for (&start, &end) in self.covered.range((
+            std::ops::Bound::Excluded(from),
+            std::ops::Bound::Excluded(to),
+        )) {
+            if start > at {
+                parts.push((at - base, start.min(to) - base));
+            }
+            at = at.max(end.min(to));
+            if at >= to {
+                break;
+            }
+        }
+        if at < to {
+            parts.push((at - base, to - base));
+        }
+        parts
+    }
+
+    /// Intersections with [from, to), already sorted and non-overlapping.
+    fn intersections(&self, from: usize, to: usize) -> Vec<(usize, usize)> {
+        let mut busy = Vec::new();
+        if from >= to {
+            return busy;
+        }
+        if let Some((_, &end)) = self.covered.range(..=from).next_back()
+            && end > from
+        {
+            busy.push((from, end.min(to)));
+        }
+        for (&start, &end) in self.covered.range((
+            std::ops::Bound::Excluded(from),
+            std::ops::Bound::Excluded(to),
+        )) {
+            busy.push((start.max(from), end.min(to)));
+        }
+        busy
+    }
+
+    /// Removes declarations whose last flight has completed, then rebuilds
+    /// the union from the remaining exact ranges.
+    fn remove(&mut self, ranges: &[(usize, usize)]) {
+        if ranges.is_empty() {
+            return;
+        }
+        let remove: HashSet<(usize, usize)> = ranges.iter().copied().collect();
+        self.ranges.retain(|range| !remove.contains(range));
+        self.exact.retain(|range| !remove.contains(range));
+        self.covered.clear();
+        self.ranges.sort_unstable();
+        for &(start, end) in &self.ranges {
+            self.cover((start, end));
+        }
+    }
+
+    fn is_empty(&self) -> bool {
+        self.ranges.is_empty()
+    }
+}
 
 /// A title buffer's host copy.
 pub(crate) struct Shadow {
@@ -39,7 +155,7 @@ pub(crate) struct Shadow {
     watched: AtomicU8,
     /// Ranges shaders of a submission not yet copied back may be writing:
     /// title memory there is older than the copy.
-    pending: Mutex<Vec<(usize, usize)>>,
+    pending: Mutex<PendingRanges>,
     /// With [`relay`]: how many submissions not yet copied back declared
     /// each range of `pending` ([`Flights`]). Locked inside `pending`'s
     /// lock.
@@ -1790,39 +1906,26 @@ impl Shadow {
         if relay() {
             self.flights.lock().unwrap_or_else(|e| e.into_inner()).declare(range, PREPARED.load(Ordering::Relaxed));
         }
-        // Dispatches declare the same ranges thousands of times.
-        if pending.contains(&range) {
+        // Dispatches declare the same ranges thousands of times. Keep their
+        // exact identities for flight completion, but use the interval union
+        // for the much more common overlap and snapshot queries.
+        if !pending.insert(range) {
             return;
         }
+        let base = self.start as usize;
+        let (from, to) = self.inside(address, len);
+        let (from, to) = (base + from, base + to);
         // In the card's memory: no snapshot. What shaders wrote is found on
         // the card (`Host::card_before` reads the declared ranges from the
         // lists).
         if self.card.is_some() {
-            pending.push(range);
+            pending.cover((from, to));
             return;
         }
-        // The parts no declared range holds yet: their bytes are taken now,
-        // just after the range's refresh (a part declared earlier has not
-        // been refreshed since, and keeps the bytes taken then).
-        let mut parts = vec![self.inside(address, len)];
-        for &(a, e) in pending.iter() {
-            let (a, e) = self.inside(a, e - a);
-            let mut rest = Vec::with_capacity(parts.len() + 1);
-            for (from, to) in parts {
-                if e <= from || a >= to {
-                    rest.push((from, to));
-                    continue;
-                }
-                if from < a {
-                    rest.push((from, a));
-                }
-                if e < to {
-                    rest.push((e, to));
-                }
-            }
-            parts = rest;
-        }
-        pending.push(range);
+        // Take only bytes not covered by an earlier declaration. The union
+        // is sorted and disjoint, so this visits only intersecting intervals.
+        let parts = pending.uncovered(from, to, base);
+        pending.cover((from, to));
         let taken: usize = parts.iter().map(|&(from, to)| to.saturating_sub(from)).sum();
         BACK_CLASS[usize::from(!self.window)].fetch_add(taken as u64, Ordering::Relaxed);
         let total = self.len as usize;
@@ -2129,9 +2232,9 @@ impl Shadow {
         let mut pending = self.pending.lock().unwrap_or_else(|e| e.into_inner());
         if relay() {
             let free = self.flights.lock().unwrap_or_else(|e| e.into_inner()).done(ranges);
-            pending.retain(|r| !free.contains(r));
+            pending.remove(&free);
         } else {
-            pending.retain(|r| !ranges.contains(r));
+            pending.remove(ranges);
         }
         if !pending.is_empty() || self.card.is_some() {
             return;
@@ -2210,14 +2313,7 @@ impl Shadow {
         if from >= to {
             return false;
         }
-        let busy: Vec<(usize, usize)> = self
-            .pending
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .iter()
-            .filter(|&&(a, e)| a < to && e > from)
-            .map(|&(a, e)| (a.max(from), e.min(to)))
-            .collect();
+        let busy = self.pending.lock().unwrap_or_else(|e| e.into_inner()).intersections(from, to);
         if busy.is_empty() {
             return false;
         }
@@ -2256,14 +2352,7 @@ impl Shadow {
         if from >= to {
             return false;
         }
-        let busy: Vec<(usize, usize)> = self
-            .pending
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .iter()
-            .filter(|&&(a, e)| a < to && e > from)
-            .map(|&(a, e)| (a.max(from), e.min(to)))
-            .collect();
+        let busy = self.pending.lock().unwrap_or_else(|e| e.into_inner()).intersections(from, to);
         if busy.is_empty() {
             return false;
         }
@@ -2374,19 +2463,11 @@ impl Shadow {
         if from >= to {
             return 0;
         }
-        let mut busy: Vec<(usize, usize)> = self
-            .pending
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .iter()
-            .copied()
-            .filter(|&(a, e)| a < to && e > from)
-            .collect();
+        let busy = self.pending.lock().unwrap_or_else(|e| e.into_inner()).intersections(from, to);
         if !busy.is_empty() {
             // Around ranges shaders are writing: the gaps, each as below
             // (in the world most submissions have such ranges; copying the
             // gaps whole cost ~1 s per frame).
-            busy.sort_unstable();
             let (mut at, mut bytes) = (from, 0);
             for (a, e) in busy {
                 if a > at {
@@ -3202,4 +3283,59 @@ pub(crate) fn near(va: u64) -> String {
         ));
     }
     text
+}
+
+#[cfg(test)]
+mod pending_range_tests {
+    use super::PendingRanges;
+
+    #[test]
+    fn overlapping_and_touching_ranges_share_one_coverage_interval() {
+        let mut pending = PendingRanges::default();
+        assert!(pending.insert((100, 120)));
+        pending.cover((100, 120));
+        assert!(pending.insert((110, 130)));
+        pending.cover((110, 130));
+        pending.cover((130, 140));
+        assert_eq!(pending.covered.iter().map(|(&a, &e)| (a, e)).collect::<Vec<_>>(), [(100, 140)]);
+        assert!(!pending.insert((110, 130)));
+    }
+
+    #[test]
+    fn snapshot_ranges_contain_only_bytes_not_already_covered() {
+        let mut pending = PendingRanges::default();
+        pending.cover((100, 120));
+        pending.cover((130, 140));
+        assert_eq!(pending.uncovered(110, 135, 100), [(20, 30)]);
+        assert_eq!(pending.uncovered(105, 115, 100), []);
+        assert_eq!(pending.uncovered(120, 130, 100), [(20, 30)]);
+    }
+
+    #[test]
+    fn removing_one_exact_range_preserves_other_overlapping_writes() {
+        let mut pending = PendingRanges::default();
+        let first = (100, 120);
+        let second = (110, 130);
+        assert!(pending.insert(first));
+        pending.cover(first);
+        assert!(pending.insert(second));
+        pending.cover(second);
+        pending.remove(&[first]);
+        assert_eq!(pending.intersections(105, 115), [(110, 115)]);
+        assert_eq!(pending.ranges, [second]);
+        assert!(pending.exact.contains(&second));
+        assert!(!pending.exact.contains(&first));
+    }
+
+    #[test]
+    fn removing_the_last_range_clears_coverage() {
+        let mut pending = PendingRanges::default();
+        let range = (50, 90);
+        assert!(pending.insert(range));
+        pending.cover(range);
+        pending.remove(&[range]);
+        assert!(pending.is_empty());
+        assert!(pending.covered.is_empty());
+        assert!(pending.intersections(60, 70).is_empty());
+    }
 }
