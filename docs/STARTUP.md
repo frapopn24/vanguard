@@ -65,6 +65,17 @@ The capture folder must exist, the game must run, and selected frames must be re
 
 ## 4. Launch the title
 
+For an experimental performance run, optionally set this in the same PowerShell
+session **before** starting VANGUARD:
+
+```powershell
+$env:VICTORY_PERFORMANCE = "1"
+```
+
+This enables the asynchronous submission/relay and CPU-side batching preset
+described in the README. Leave it unset for the baseline run. It is read when
+the GPU subsystem is initialized, so changing it after launch has no effect.
+
 The `run` subcommand requires the **full path to the actual title executable**. The configured `game_dir` does not automatically identify or select that executable. Do not guess its filename.
 
 ```powershell
