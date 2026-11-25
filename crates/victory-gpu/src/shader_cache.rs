@@ -34,7 +34,7 @@ pub fn use_shader_cache(dir: PathBuf) {
 }
 
 /// Shaders found in the cache and translated since the start.
-pub(crate) fn counts() -> (u64, u64) {
+pub fn counts() -> (u64, u64) {
     (HITS.load(Ordering::Relaxed), MISSES.load(Ordering::Relaxed))
 }
 
