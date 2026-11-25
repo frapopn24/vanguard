@@ -6,25 +6,40 @@ history stored by normal runs.
 
 ## Commands
 
-Build the release CLI first, then run these commands from the VANGUARD repository
-root so the intended `victory.toml` is loaded. Do not run the preloader while the
-game is active; both processes would compete for GPU compiler time and memory.
+Build the preloader with the **same build profile and features** that you
+will use for the game. Translated-shader cache keys include the diagnostics
+feature, so a release preloader will not populate the diagnostics shader cache
+used by \`target\\diag\\victory.exe\`.
 
-```powershell
+For normal release gameplay:
+
+\`\`\`powershell
 cargo build --release -p victory
-```
+$victory = ".\\target\\release\\victory.exe"
+\`\`\`
+
+For the diagnostics build used by frame captures:
+
+\`\`\`powershell
+cargo build --profile diag -p victory --features diagnostics
+$victory = ".\\target\\diag\\victory.exe"
+\`\`\`
+
+Then run these commands from the VANGUARD repository root so the intended
+\`victory.toml\` is loaded. Do not run the preloader while the game is active;
+both processes would compete for GPU compiler time and memory.
 
 Show the current cache without changing it:
 
-```powershell
-.\target\release\victory.exe preload --status
-```
+\`\`\`powershell
+& $victory preload --status
+\`\`\`
 
 Scan the configured title and prepare everything currently supported:
 
-```powershell
-.\target\release\victory.exe preload --jobs 8
-```
+\`\`\`powershell
+& $victory preload --jobs 8
+\`\`\`
 
 Or provide one or more explicit title-data directories:
 
