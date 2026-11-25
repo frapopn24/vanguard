@@ -306,7 +306,7 @@ pub fn run(
     Ok(())
 }
 
-/// `victory warm`: fills the caches a run reads (`Command::Warm`).
+/// Offline shader and compute-pipeline preparation for later title runs.
 fn record_preload_failure(failures: &Mutex<BTreeMap<String, usize>>, reason: &str) {
     let mut map = failures.lock().unwrap_or_else(|e| e.into_inner());
     *map.entry(reason.to_owned()).or_default() += 1;
