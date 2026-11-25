@@ -573,7 +573,7 @@ pub fn preload(
     println!("report_saved        {}", report_path.display());
 
     let refused_total: usize = refused.iter().map(|n| n.load(Ordering::Relaxed)).sum();
-    let failed_pipelines = compute_refused.load(Ordering::Relaxed);
+    let failed_pipelines = compute_refused.load(Ordering::Relaxed)\n        + compute_left_out.load(Ordering::Relaxed);
     if strict && (refused_total > 0 || failed_pipelines > 0) {
         anyhow::bail!(
             "strict preload failed: {refused_total} shader translations and {failed_pipelines} compute PSOs were refused; see {}",
