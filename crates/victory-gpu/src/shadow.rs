@@ -3405,6 +3405,15 @@ mod pending_range_tests {
     }
 
     #[test]
+    fn intersections_return_the_union_of_overlapping_and_touching_ranges() {
+        let mut pending = PendingRanges::default();
+        for range in [(100, 120), (110, 130), (130, 140)] {
+            pending.adjust_coverage(range, true);
+        }
+        assert_eq!(pending.intersections(90, 150), vec![(100, 140)]);
+    }
+
+    #[test]
     fn snapshot_ranges_contain_only_bytes_not_already_covered() {
         let mut pending = PendingRanges::default();
         pending.adjust_coverage((100, 120), true);
