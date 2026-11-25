@@ -1732,7 +1732,7 @@ impl State {
                 host.texture_slot_recheck(index, frame, (at, len), crate::texture::fingerprint(at, len));
             }
         }
-        catching_up(began.elapsed().saturating_sub(SPAN));
+        catching_up(began.elapsed().saturating_sub(span));
     }
 
     /// For the frame listing, after a dropped dispatch's line: its group
