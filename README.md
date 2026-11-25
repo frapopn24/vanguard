@@ -209,8 +209,11 @@ blocking texture refreshes.
 Each corresponding `VICTORY_*` setting can override the preset explicitly;
 for example, set `VICTORY_WIDE_BACK=0` to turn off only that part. This preset
 is experimental: compare it with the default path on the same scene and watch
-for rendering errors, hangs, or device removal. It does not guarantee higher
-FPS on every adapter. Do not combine it with `VICTORY_GPU_TIMING`, which
+for rendering errors, hangs, or device removal. For an even more aggressive
+diagnostic trade-off, `VICTORY_HEAP_TEXTURES=0` disables the preparation pass
+for dynamically indexed textures entirely; expect many such materials to be
+missing. This is not part of the default preset. The preset does not guarantee
+higher FPS on every adapter. Do not combine it with `VICTORY_GPU_TIMING`, which
 deliberately disables asynchronous submission.
 
 ### Known problems
