@@ -115,6 +115,25 @@ PSOs loaded or created. A refusal is useful diagnostic data, not something the
 manager can automatically repair: unsupported instructions, host API rejection,
 or unsupported graphics stages require a compatibility-layer fix.
 
+## Next development stage: exact graphics-PSO recipes
+
+The next expansion is to persist a versioned recipe for each graphics PSO that a
+normal run actually uses: shader-container hashes plus the complete graphics
+state captured from the title's pipeline stream. The offline manager can then
+resolve those hashes against the title archives and recreate the exact PSO
+descriptions before gameplay.
+
+This is deliberately different from guessing a PSO from a vertex/pixel shader
+pair. The recipe must preserve the root-signature inputs, render-target and
+depth formats, input layout, topology, blend, rasterizer, depth/stencil and
+sample state. Recipes also need schema versioning and bounds checks because
+they are persistent data and may outlive a VANGUARD build.
+
+That stage should land only after the current manager passes Windows build and
+runtime tests. The first manager already reuses the learned-key early-start path;
+the recipe format is what would let it compile those known graphics PSOs before
+the title recreates them.
+
 ## Performance expectations
 
 Preloading moves work out of the first gameplay use and into an explicit
