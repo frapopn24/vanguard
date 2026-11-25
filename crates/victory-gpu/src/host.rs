@@ -2579,7 +2579,7 @@ mod late_tests {
 
 /// Whether a title buffer copy that continues the one recorded before it
 /// in its list becomes one step with it (`VICTORY_JOIN_COPIES=1`; off by
-/// default).
+/// default unless `VICTORY_PERFORMANCE=1`).
 ///
 /// Each copy is done at submission through the kernel, which reports a
 /// page that is not there instead of faulting (`copy_mapped`), tells the
