@@ -54,6 +54,12 @@ This repository is an independent fork. It builds on work by JoshuuDev and the c
 
 ---
 
+## Inherited DirectStorage change
+
+The inherited branch documentation records a DirectStorage read-path change: kernel reads into title memory are first received into a buffer and then copied into title memory from user mode. The stated motivation was to avoid a guarded-page interaction that had caused `ERROR_INVALID_USER_BUFFER` (`0x800706f8`) during raw DirectStorage reads. The same note reports a 5.5-minute run without a failed request on one test machine.
+
+This is a historical, single-machine result—not a guarantee that DirectStorage is fully correct or that the issue is resolved on every system. The original inherited note identifies [myokex/victory-amd](https://github.com/myokex/victory-amd) and commit `070df42` in its provenance. This community repository separately identifies [JoshuuDev/victory-amd](https://github.com/JoshuuDev/victory-amd) as its stated project base; retain both references when discussing the inherited history.
+
 ## Technical lineage and implementation notes
 
 The current community codebase is based on [JoshuuDev/victory-amd](https://github.com/JoshuuDev/victory-amd). Its wider technical lineage includes [victory-fork](https://github.com/fxceless/victory-fork) and the original [VIctory](https://github.com/Marvisak/VIctory). This repository keeps those upstream origins and contributor credits visible. Historical hardware notes below describe earlier upstream testing, not a guarantee for every system.
