@@ -183,6 +183,23 @@ by default (`VICTORY_LATE_WAIT`, `VICTORY_RELAY`, `VICTORY_WIDE_BACK`,
 `VICTORY_CARD_BUFFERS_MIN_MB`, `VICTORY_INPLACE`, `VICTORY_BVH_BUILDER`, ...).
 Each is described in a comment where it is read.
 
+For an experimental gameplay performance preset, set this **before** launching:
+
+```powershell
+$env:VICTORY_PERFORMANCE = "1"
+```
+
+The preset enables asynchronous submission/relay (late wait stage 3 with relay
+stage 2), parallel shader-write snapshots and comparisons, joining adjacent
+non-overlapping title-memory copies, and a 1 MiB threshold for putting large
+title-buffer copies in card memory. The existing card-memory budget remains
+512 MiB by default. Each corresponding `VICTORY_*` setting can override the
+preset explicitly; for example, set `VICTORY_WIDE_BACK=0` to turn off only
+that part. This preset is experimental: compare it with the default path on the
+same scene and watch for rendering errors, hangs, or device removal. It does
+not guarantee higher FPS on every adapter. Do not combine it with
+`VICTORY_GPU_TIMING`, which deliberately disables asynchronous submission.
+
 ### Known problems
 
 - Everything in shadow is black (see above).
