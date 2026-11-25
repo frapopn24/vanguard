@@ -1,7 +1,7 @@
 //! The offline batch: every shader found goes through the translator, and
 //! what it cannot handle yet is tallied (decision 0003).
 
-use std::collections::{BTreeMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -306,59 +306,186 @@ pub fn run(
     Ok(())
 }
 
-/// `victory warm`: fills the caches a run reads (`Command::Warm`).
-pub fn warm(paths: Vec<PathBuf>, jobs: Option<usize>, pipelines: bool) -> Result<()> {
+/// Offline shader and compute-pipeline preparation for later title runs.
+fn record_preload_failure(failures: &Mutex<BTreeMap<String, usize>>, reason: &str) {
+    let mut map = failures.lock().unwrap_or_else(|e| e.into_inner());
+    *map.entry(reason.to_owned()).or_default() += 1;
+}
+
+/// Scan the title's shader containers, populate the translated-shader cache, and
+/// optionally create compute PSOs in the host pipeline library.
+pub fn preload(
+    paths: Vec<PathBuf>,
+    jobs: Option<usize>,
+    compute_pipelines: bool,
+    report_path: Option<PathBuf>,
+    strict: bool,
+) -> Result<()> {
+    use std::sync::atomic::AtomicU64;
+
+    const STAGES: [&str; 4] = ["vertex", "pixel", "mesh", "compute"];
     let paths = crate::default_paths(paths)?;
     let cfg = victory_core::Config::load()?;
-    victory_hle::modules::d3d12x::use_shader_cache(cfg.cache_subdir("shaders")?);
+    let shader_dir = cfg.cache_subdir("shaders")?;
+    victory_hle::modules::d3d12x::use_shader_cache(shader_dir);
     let threads = jobs.unwrap_or_else(|| std::thread::available_parallelism().map_or(4, |n| n.get()));
-    let seen = Mutex::new(HashSet::new());
-    let [done, refused, made, unmade] = [const { AtomicUsize::new(0) }; 4];
+    anyhow::ensure!(threads > 0, "worker count must be at least one");
+
     let started = std::time::Instant::now();
+    let seen = Mutex::new(HashSet::new());
+    let failures = Mutex::new(BTreeMap::<String, usize>::new());
+    let failed_hashes = Mutex::new(BTreeSet::<String>::new());
+    let files = AtomicUsize::new(0);
+    let files_too_large = AtomicUsize::new(0);
+    let files_unreadable = AtomicUsize::new(0);
+    let bytes_scanned = AtomicU64::new(0);
+    let records = AtomicUsize::new(0);
+    let processed = AtomicUsize::new(0);
+    let containers = AtomicUsize::new(0);
+    let duplicates = AtomicUsize::new(0);
+    let corrupt_records = AtomicUsize::new(0);
+    let malformed_containers = AtomicUsize::new(0);
+    let without_dxil = AtomicUsize::new(0);
+    let native_errors = AtomicUsize::new(0);
+    let unsupported_stages = AtomicUsize::new(0);
+    let translated: [AtomicUsize; 4] = [const { AtomicUsize::new(0) }; 4];
+    let refused: [AtomicUsize; 4] = [const { AtomicUsize::new(0) }; 4];
+    let compute_requested = AtomicUsize::new(0);
+    let compute_ready = AtomicUsize::new(0);
+    let compute_refused = AtomicUsize::new(0);
+    let compute_left_out = AtomicUsize::new(0);
+
+    println!("VANGUARD PRELOAD");
+    println!("cache            {}", cfg.cache_dir.display());
+    println!("workers          {threads}");
+    println!("compute PSOs     {}", if compute_pipelines { "enabled" } else { "disabled" });
     for root in &paths {
-        for entry in walkdir::WalkDir::new(root).into_iter().filter_map(Result::ok) {
-            if !entry.file_type().is_file() || entry.metadata().map_or(0, |m| m.len()) > MAX_FILE {
+        println!("scanning         {}", root.display());
+        for entry in walkdir::WalkDir::new(root).into_iter().filter_map(|entry| entry.ok()) {
+            if !entry.file_type().is_file() {
                 continue;
             }
-            let Ok(data) = std::fs::read(entry.path()) else {
-                continue;
+            files.fetch_add(1, Ordering::Relaxed);
+            let metadata = match entry.metadata() {
+                Ok(metadata) => metadata,
+                Err(_) => {
+                    files_unreadable.fetch_add(1, Ordering::Relaxed);
+                    continue;
+                }
             };
-            let jobs = sources(&data);
+            if metadata.len() > MAX_FILE {
+                files_too_large.fetch_add(1, Ordering::Relaxed);
+                continue;
+            }
+            let data = match std::fs::read(entry.path()) {
+                Ok(data) => data,
+                Err(_) => {
+                    files_unreadable.fetch_add(1, Ordering::Relaxed);
+                    continue;
+                }
+            };
+            bytes_scanned.fetch_add(data.len() as u64, Ordering::Relaxed);
+            let sources = sources(&data);
+            records.fetch_add(sources.len(), Ordering::Relaxed);
+            if sources.is_empty() {
+                continue;
+            }
             let next = AtomicUsize::new(0);
-            std::thread::scope(|s| {
-                for _ in 0..threads.min(jobs.len()) {
-                    s.spawn(|| {
-                        while let Some(job) = jobs.get(next.fetch_add(1, Ordering::Relaxed)) {
-                            let Some(bytes) = job.bytes() else { continue };
-                            let Ok(container) = Container::parse(&bytes) else { continue };
-                            // As the title passes it: no more than the container.
-                            let Some(total) = bytes.get(0x18..0x1c).and_then(|b| b.try_into().ok()) else { continue };
+            std::thread::scope(|scope| {
+                for _ in 0..threads.min(sources.len()) {
+                    scope.spawn(|| {
+                        while let Some(source) = sources.get(next.fetch_add(1, Ordering::Relaxed)) {
+                            let Some(bytes) = source.bytes() else {
+                                corrupt_records.fetch_add(1, Ordering::Relaxed);
+                                record_preload_failure(&failures, "corrupt packed shader record");
+                                continue;
+                            };
+                            let container = match Container::parse(&bytes) {
+                                Ok(container) => container,
+                                Err(_) => {
+                                    malformed_containers.fetch_add(1, Ordering::Relaxed);
+                                    record_preload_failure(&failures, "invalid shader container");
+                                    continue;
+                                }
+                            };
+                            containers.fetch_add(1, Ordering::Relaxed);
+                            // Honour the container's own declared size; do not warm trailing data.
+                            let Some(total) = bytes.get(0x18..0x1c).and_then(|b| b.try_into().ok()) else {
+                                malformed_containers.fetch_add(1, Ordering::Relaxed);
+                                record_preload_failure(&failures, "missing container length");
+                                continue;
+                            };
                             let total = u32::from_le_bytes(total) as usize;
                             let bytes = &bytes[..total.min(bytes.len())];
-                            let Some(dxil) = container.part(FourCC::DXIL).map(|p| p.data) else { continue };
+                            let Some(dxil) = container.part(FourCC::DXIL).map(|part| part.data) else {
+                                without_dxil.fetch_add(1, Ordering::Relaxed);
+                                record_preload_failure(&failures, "container has no DXIL part");
+                                continue;
+                            };
                             if !lock(&seen).insert(blake3::hash(bytes)) {
+                                duplicates.fetch_add(1, Ordering::Relaxed);
                                 continue;
                             }
-                            let Ok(programs) = native_programs(dxil) else { continue };
-                            let stage = programs.iter().find_map(|p| match p.stage {
-                                HwStage::Vs => Some("vertex"),
-                                HwStage::Ps => Some("pixel"),
-                                HwStage::Ms => Some("mesh"),
-                                HwStage::Cs => Some("compute"),
+                            let programs = match native_programs(dxil) {
+                                Ok(programs) => programs,
+                                Err(_) => {
+                                    native_errors.fetch_add(1, Ordering::Relaxed);
+                                    record_preload_failure(&failures, "native shader program could not be decoded");
+                                    continue;
+                                }
+                            };
+                            let shader_hash = blake3::hash(bytes).to_hex()[..16].to_owned();
+                            let stage = programs.iter().find_map(|program| match program.stage {
+                                HwStage::Vs => Some((0usize, "vertex")),
+                                HwStage::Ps => Some((1usize, "pixel")),
+                                HwStage::Ms => Some((2usize, "mesh")),
+                                HwStage::Cs => Some((3usize, "compute")),
                                 _ => None,
                             });
-                            let Some(stage) = stage else { continue };
-                            let compute = pipelines && stage == "compute";
-                            let (translated, pipeline) = victory_hle::modules::d3d12x::warm(stage, bytes, compute);
-                            let count = if translated { &done } else { &refused };
-                            let n = count.fetch_add(1, Ordering::Relaxed) + 1;
-                            match pipeline {
-                                Some(true) => made.fetch_add(1, Ordering::Relaxed),
-                                Some(false) => unmade.fetch_add(1, Ordering::Relaxed),
-                                None => 0,
+                            let Some((index, stage_name)) = stage else {
+                                unsupported_stages.fetch_add(1, Ordering::Relaxed);
+                                record_preload_failure(&failures, "no supported vertex, pixel, mesh or compute stage");
+                                failed_hashes.lock().unwrap_or_else(|e| e.into_inner()).insert(format!("unsupported {shader_hash}"));
+                                continue;
                             };
-                            if n.is_multiple_of(2000) {
-                                println!("{:6.0} s  {n} shaders", started.elapsed().as_secs_f64());
+
+                            let make_compute = compute_pipelines && index == 3;
+                            if make_compute {
+                                compute_requested.fetch_add(1, Ordering::Relaxed);
+                            }
+                            let (ok, pipeline) =
+                                victory_hle::modules::d3d12x::warm(stage_name, bytes, make_compute);
+                            if ok {
+                                translated[index].fetch_add(1, Ordering::Relaxed);
+                            } else {
+                                refused[index].fetch_add(1, Ordering::Relaxed);
+                                record_preload_failure(&failures, &format!("{stage_name} shader translation refused"));
+                                failed_hashes.lock().unwrap_or_else(|e| e.into_inner()).insert(format!("{stage_name} {shader_hash}"));
+                            }
+                            if make_compute && ok {
+                                match pipeline {
+                                    Some(true) => {
+                                        compute_ready.fetch_add(1, Ordering::Relaxed);
+                                    }
+                                    Some(false) => {
+                                        compute_refused.fetch_add(1, Ordering::Relaxed);
+                                        record_preload_failure(&failures, "compute PSO creation refused");
+                                        failed_hashes.lock().unwrap_or_else(|e| e.into_inner()).insert(format!("compute-PSO {shader_hash}"));
+                                    }
+                                    None => {
+                                        compute_left_out.fetch_add(1, Ordering::Relaxed);
+                                        record_preload_failure(&failures, "compute PSO left out by runtime policy");
+                                        failed_hashes.lock().unwrap_or_else(|e| e.into_inner()).insert(format!("compute-left-out {shader_hash}"));
+                                    }
+                                }
+                            }
+
+                            let count = processed.fetch_add(1, Ordering::Relaxed) + 1;
+                            if count.is_multiple_of(1000) {
+                                println!(
+                                    "progress         {count} unique shaders in {:.0}s",
+                                    started.elapsed().as_secs_f64()
+                                );
                             }
                         }
                     });
@@ -366,15 +493,94 @@ pub fn warm(paths: Vec<PathBuf>, jobs: Option<usize>, pipelines: bool) -> Result
             });
         }
     }
+
+    // Flush compiled compute PSOs to the same host library used by normal runs.
     victory_hle::modules::d3d12x::save_pipeline_cache();
-    println!(
-        "warm         {} translated, {} refused; {} compute pipelines, {} refused; {:.0} s",
-        done.into_inner(),
-        refused.into_inner(),
-        made.into_inner(),
-        unmade.into_inner(),
-        started.elapsed().as_secs_f64()
-    );
+    let (shader_hits, shader_misses) =
+        victory_hle::modules::d3d12x::shader_cache_counts();
+    let (psos_loaded, psos_created, psos_started_early) =
+        victory_hle::modules::d3d12x::pipeline_cache_counts();
+
+    let mut report = String::new();
+    use std::fmt::Write as _;
+    let _ = writeln!(report, "VANGUARD PRELOAD REPORT");
+    let _ = writeln!(report, "elapsed_seconds     {:.1}", started.elapsed().as_secs_f64());
+    let _ = writeln!(report, "cache_root          {}", cfg.cache_dir.display());
+    let _ = writeln!(report, "worker_threads      {threads}");
+    let _ = writeln!(report, "compute_pso_build   {compute_pipelines}");
+    let _ = writeln!(report, "files_seen          {}", files.load(Ordering::Relaxed));
+    let _ = writeln!(report, "files_too_large     {}", files_too_large.load(Ordering::Relaxed));
+    let _ = writeln!(report, "files_unreadable    {}", files_unreadable.load(Ordering::Relaxed));
+    let _ = writeln!(report, "bytes_scanned       {}", bytes_scanned.load(Ordering::Relaxed));
+    let _ = writeln!(report, "shader_records      {}", records.load(Ordering::Relaxed));
+    let _ = writeln!(report, "containers_parsed   {}", containers.load(Ordering::Relaxed));
+    let _ = writeln!(report, "duplicate_containers  {}", duplicates.load(Ordering::Relaxed));
+    let _ = writeln!(report, "corrupt_records     {}", corrupt_records.load(Ordering::Relaxed));
+    let _ = writeln!(report, "malformed_containers {}", malformed_containers.load(Ordering::Relaxed));
+    let _ = writeln!(report, "without_dxil        {}", without_dxil.load(Ordering::Relaxed));
+    let _ = writeln!(report, "native_decode_errors {}", native_errors.load(Ordering::Relaxed));
+    let _ = writeln!(report, "unsupported_stages  {}", unsupported_stages.load(Ordering::Relaxed));
+    let _ = writeln!(report);
+    let _ = writeln!(report, "SHADER TRANSLATIONS");
+    for (i, name) in STAGES.iter().enumerate() {
+        let _ = writeln!(
+            report,
+            "{name:<8} translated={} refused={}",
+            translated[i].load(Ordering::Relaxed),
+            refused[i].load(Ordering::Relaxed)
+        );
+    }
+    let _ = writeln!(report);
+    let _ = writeln!(report, "COMPUTE PIPELINES");
+    let _ = writeln!(report, "requested            {}", compute_requested.load(Ordering::Relaxed));
+    let _ = writeln!(report, "ready                {}", compute_ready.load(Ordering::Relaxed));
+    let _ = writeln!(report, "refused              {}", compute_refused.load(Ordering::Relaxed));
+    let _ = writeln!(report, "left_out             {}", compute_left_out.load(Ordering::Relaxed));
+    let _ = writeln!(report);
+    let _ = writeln!(report, "CACHE ACTIVITY");
+    let _ = writeln!(report, "translated_cache_hits   {shader_hits}");
+    let _ = writeln!(report, "translated_cache_misses {shader_misses}");
+    let _ = writeln!(report, "host_psos_loaded        {psos_loaded}");
+    let _ = writeln!(report, "host_psos_created       {psos_created}");
+    let _ = writeln!(report, "host_psos_started_early {psos_started_early}");
+    let _ = writeln!(report);
+    let _ = writeln!(report, "GRAPHICS PSO NOTE");
+    let _ = writeln!(report, "Graphics PSOs require the title's complete root signature, render-target formats");
+    let _ = writeln!(report, "and fixed-function state. Learned graphics keys are started early when the title");
+    let _ = writeln!(report, "recreates their matching pipeline objects; shader-only offline scan cannot invent them.");
+    let _ = writeln!(report);
+    let _ = writeln!(report, "FAILED SHADER HASHES");
+    let failed_hashes = failed_hashes.into_inner().unwrap_or_else(|e| e.into_inner());
+    for item in failed_hashes.iter().take(200) {
+        let _ = writeln!(report, "{item}");
+    }
+    let _ = writeln!(report);
+    let _ = writeln!(report, "FAILURES");
+    let mut failures = failures.into_inner().unwrap_or_else(|e| e.into_inner()).into_iter().collect::<Vec<_>>();
+    failures.sort_by_key(|(_, count)| std::cmp::Reverse(*count));
+    for (reason, count) in failures.iter().take(20) {
+        let _ = writeln!(report, "{count:>8}  {reason}");
+    }
+
+    let report_path = report_path.unwrap_or_else(|| cfg.cache_dir.join("preload-report.txt"));
+    victory_core::ensure_outside_repo(&report_path)?;
+    if let Some(parent) = report_path.parent().filter(|p| !p.as_os_str().is_empty()) {
+        std::fs::create_dir_all(parent)?;
+    }
+    std::fs::write(&report_path, &report)?;
+
+    print!("{report}");
+    println!("report_saved        {}", report_path.display());
+
+    let refused_total: usize = refused.iter().map(|n| n.load(Ordering::Relaxed)).sum();
+    let failed_pipelines = compute_refused.load(Ordering::Relaxed)
+        + compute_left_out.load(Ordering::Relaxed);
+    if strict && (refused_total > 0 || failed_pipelines > 0) {
+        anyhow::bail!(
+            "strict preload failed: {refused_total} shader translations and {failed_pipelines} compute PSOs were refused; see {}",
+            report_path.display()
+        );
+    }
     Ok(())
 }
 

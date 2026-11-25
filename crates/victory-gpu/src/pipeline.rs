@@ -744,6 +744,17 @@ pub fn save_pipeline_cache() {
     library::save(true);
 }
 
+/// Host PSOs loaded from the driver library, created, and started early in this process.
+#[cfg(windows)]
+pub fn cache_counts() -> (u64, u64, u64) {
+    use std::sync::atomic::Ordering::Relaxed;
+    (
+        library::LOADED.load(Relaxed),
+        library::MADE.load(Relaxed),
+        library::EARLY.load(Relaxed),
+    )
+}
+
 #[cfg(test)]
 mod tests {
     #[cfg(all(windows, feature = "diagnostics"))]
