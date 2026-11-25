@@ -46,10 +46,12 @@ fn heap_texture_budget() -> (u64, u64, std::time::Duration, std::time::Duration)
                 .and_then(|value| value.trim().parse::<u64>().ok())
                 .unwrap_or(default)
         };
-        let per_frame_mb = if performance { 48 } else { 192 };
-        let catching_up_mb = if performance { 96 } else { 512 };
-        let per_frame_ms = if performance { 60 } else { 250 };
-        let catching_up_ms = if performance { 120 } else { 1500 };
+        // A more aggressive streaming trade-off: dynamically indexed
+        // textures can arrive later, freeing the recording thread sooner.
+        let per_frame_mb = if performance { 24 } else { 192 };
+        let catching_up_mb = if performance { 48 } else { 512 };
+        let per_frame_ms = if performance { 30 } else { 250 };
+        let catching_up_ms = if performance { 60 } else { 1500 };
         (
             mb("VICTORY_HEAP_TEXTURES_MB", per_frame_mb),
             mb("VICTORY_HEAP_TEXTURES_CATCHUP_MB", catching_up_mb),
@@ -1462,13 +1464,17 @@ impl State {
                 // By the copy's number: a copy made where one let go was
                 // (`shadow::let_go_idle`) has never been refreshed.
                 let key = shadow.id() as usize;
-                // `VICTORY_UNWATCHED_FRAMES` sets the interval (1: every frame).
+                // `VICTORY_UNWATCHED_FRAMES` sets the interval (1: every
+                // frame). With the performance preset, refresh these ranges
+                // every other frame by default; one frame of stale streamed
+                // geometry is the trade-off for half as many whole copies.
                 static EVERY: std::sync::OnceLock<u64> = std::sync::OnceLock::new();
                 let every = *EVERY.get_or_init(|| {
                     std::env::var("VICTORY_UNWATCHED_FRAMES")
                         .ok()
                         .and_then(|v| v.parse().ok())
-                        .unwrap_or(1)
+                        .unwrap_or(if crate::performance_mode() { 2 } else { 1 })
+                        .max(1)
                 });
                 match whole.get(&key) {
                     Some(&last) if frame < last + every => continue,
