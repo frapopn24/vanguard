@@ -360,7 +360,7 @@ pub fn preload(
     println!("compute PSOs     {}", if compute_pipelines { "enabled" } else { "disabled" });
     for root in &paths {
         println!("scanning         {}", root.display());
-        for entry in walkdir::WalkDir::new(root).into_iter().filter_map(Result::ok) {
+        for entry in walkdir::WalkDir::new(root).into_iter().filter_map(|entry| entry.ok()) {
             if !entry.file_type().is_file() {
                 continue;
             }
