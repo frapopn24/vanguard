@@ -46,13 +46,13 @@ impl PendingRanges {
         true
     }
 
-    /// Adds a range to the sorted, disjoint union (merging touching ranges).
+    /// Adds a range to the sorted, disjoint union (merging overlaps).
     fn cover(&mut self, (mut start, mut end): (usize, usize)) {
         if start >= end {
             return;
         }
         if let Some((&before, &before_end)) = self.covered.range(..=start).next_back()
-            && before_end >= start
+            && before_end > start
         {
             start = before;
             end = end.max(before_end);
@@ -61,7 +61,7 @@ impl PendingRanges {
         loop {
             let next = self.covered.range(start..).next().map(|(&a, &e)| (a, e));
             match next {
-                Some((next_start, next_end)) if next_start <= end => {
+                Some((next_start, next_end)) if next_start < end => {
                     self.covered.remove(&next_start);
                     end = end.max(next_end);
                 }
@@ -3290,14 +3290,17 @@ mod pending_range_tests {
     use super::PendingRanges;
 
     #[test]
-    fn overlapping_and_touching_ranges_share_one_coverage_interval() {
+    fn overlapping_ranges_share_coverage_but_touching_ranges_stay_distinct() {
         let mut pending = PendingRanges::default();
         assert!(pending.insert((100, 120)));
         pending.cover((100, 120));
         assert!(pending.insert((110, 130)));
         pending.cover((110, 130));
         pending.cover((130, 140));
-        assert_eq!(pending.covered.iter().map(|(&a, &e)| (a, e)).collect::<Vec<_>>(), [(100, 140)]);
+        assert_eq!(
+            pending.covered.iter().map(|(&a, &e)| (a, e)).collect::<Vec<_>>(),
+            vec![(100, 130), (130, 140)]
+        );
         assert!(!pending.insert((110, 130)));
     }
 
@@ -3306,9 +3309,9 @@ mod pending_range_tests {
         let mut pending = PendingRanges::default();
         pending.cover((100, 120));
         pending.cover((130, 140));
-        assert_eq!(pending.uncovered(110, 135, 100), [(20, 30)]);
-        assert_eq!(pending.uncovered(105, 115, 100), []);
-        assert_eq!(pending.uncovered(120, 130, 100), [(20, 30)]);
+        assert_eq!(pending.uncovered(110, 135, 100), vec![(20, 30)]);
+        assert_eq!(pending.uncovered(105, 115, 100), vec![]);
+        assert_eq!(pending.uncovered(120, 130, 100), vec![(20, 30)]);
     }
 
     #[test]
@@ -3321,8 +3324,8 @@ mod pending_range_tests {
         assert!(pending.insert(second));
         pending.cover(second);
         pending.remove(&[first]);
-        assert_eq!(pending.intersections(105, 115), [(110, 115)]);
-        assert_eq!(pending.ranges, [second]);
+        assert_eq!(pending.intersections(105, 115), vec![(110, 115)]);
+        assert_eq!(pending.ranges, vec![second]);
         assert!(pending.exact.contains(&second));
         assert!(!pending.exact.contains(&first));
     }
