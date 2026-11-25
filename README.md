@@ -194,12 +194,24 @@ stage 2), parallel shader-write snapshots and comparisons, joining adjacent
 non-overlapping title-memory copies, and a 1 MiB threshold for putting large
 title-buffer copies in card memory. The card-memory budget is raised
 from 512 MiB to at most 1 GiB; allocation still respects the live DXGI video
-memory budget and can be reduced with `VICTORY_CARD_BUFFERS_MB`. Each
-corresponding `VICTORY_*` setting can override the preset explicitly; for
-example, set `VICTORY_WIDE_BACK=0` to turn off only that part. This preset is experimental: compare it with the default path on the
-same scene and watch for rendering errors, hangs, or device removal. It does
-not guarantee higher FPS on every adapter. Do not combine it with
-`VICTORY_GPU_TIMING`, which deliberately disables asynchronous submission.
+memory budget and can be reduced with `VICTORY_CARD_BUFFERS_MB`.
+
+To protect frame time, the preset also avoids blocking texture refreshes while
+the title remaps memory and limits bindless texture uploads to 48 MiB / 60 ms
+per frame (96 MiB / 120 ms while catching up), rather than 192 MiB / 250 ms
+(512 MiB / 1.5 s while catching up). This is an intentional visual trade-off:
+some dynamically indexed textures can appear later while their upload queue
+drains. Override these limits with `VICTORY_HEAP_TEXTURES_MB`,
+`VICTORY_HEAP_TEXTURES_MS`, `VICTORY_HEAP_TEXTURES_CATCHUP_MB` and
+`VICTORY_HEAP_TEXTURES_CATCHUP_MS`; set `VICTORY_TEXTURE_NO_WAIT=0` to restore
+blocking texture refreshes.
+
+Each corresponding `VICTORY_*` setting can override the preset explicitly;
+for example, set `VICTORY_WIDE_BACK=0` to turn off only that part. This preset
+is experimental: compare it with the default path on the same scene and watch
+for rendering errors, hangs, or device removal. It does not guarantee higher
+FPS on every adapter. Do not combine it with `VICTORY_GPU_TIMING`, which
+deliberately disables asynchronous submission.
 
 ### Known problems
 
