@@ -5,6 +5,7 @@
 
 mod census;
 mod inspect;
+mod preload;
 mod run;
 mod shader;
 mod translate;
@@ -85,16 +86,26 @@ enum Command {
         #[arg(long)]
         jobs: Option<usize>,
     },
-    /// Translate the shaders of a title's archives into the cache and make
-    /// their compute pipelines, so that a run finds them there.
-    Warm {
+    /// Build and inspect the shader and host-pipeline preload caches (alias: warm).
+    #[command(alias = "warm")]
+    Preload {
+        /// Title directory or directories; defaults to configured game and test titles.
         paths: Vec<PathBuf>,
         /// Worker threads (default: every logical core).
         #[arg(long)]
         jobs: Option<usize>,
-        /// Only translate: no host pipelines.
+        /// Translate shaders but do not build compute PSOs.
+        #[arg(long, alias = "no-pipelines")]
+        no_compute_pipelines: bool,
+        /// Show existing cache contents without scanning or changing them.
         #[arg(long)]
-        no_pipelines: bool,
+        status: bool,
+        /// Write the detailed report here (defaults to cache/preload-report.txt).
+        #[arg(long)]
+        report: Option<PathBuf>,
+        /// Exit with an error if any supported shader translation or requested compute PSO is refused.
+        #[arg(long)]
+        strict: bool,
     },
     /// Prepare, map and bind a title executable; with --execute, run it.
     Run {
@@ -174,7 +185,24 @@ fn main() -> Result<()> {
             }
             translate::run(paths, validate, pipelines, list, jobs)
         }
-        Command::Warm { paths, jobs, no_pipelines } => translate::warm(paths, jobs, !no_pipelines),
+        Command::Preload {
+            paths,
+            jobs,
+            no_compute_pipelines,
+            status,
+            report,
+            strict,
+        } => {
+            if status {
+                anyhow::ensure!(
+                    paths.is_empty() && jobs.is_none() && !no_compute_pipelines && report.is_none() && !strict,
+                    "`preload --status` cannot be combined with build options"
+                );
+                preload::status()
+            } else {
+                translate::preload(paths, jobs, !no_compute_pipelines, report, strict)
+            }
+        },
         Command::Run {
             exe,
             unimplemented,
