@@ -1521,7 +1521,10 @@ static CARD_PASSES: [std::sync::atomic::AtomicU64; 3] = [const { std::sync::atom
 /// so eight threads take an eighth of them each.
 fn wide_merge() -> bool {
     static ON: OnceLock<bool> = OnceLock::new();
-    *ON.get_or_init(|| std::env::var_os("VICTORY_WIDE_MERGE").is_some_and(|v| v == "1"))
+    *ON.get_or_init(|| match std::env::var("VICTORY_WIDE_MERGE") {
+        Ok(value) => value == "1",
+        Err(_) => crate::performance_mode(),
+    })
 }
 
 /// One declared range of a copy in the card's memory, in a submission.
