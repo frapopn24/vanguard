@@ -198,14 +198,19 @@ from 512 MiB to at most 1 GiB; allocation still respects the live DXGI video
 memory budget and can be reduced with `VICTORY_CARD_BUFFERS_MB`.
 
 To protect frame time, the preset also avoids blocking texture refreshes while
-the title remaps memory and limits bindless texture uploads to 48 MiB / 60 ms
-per frame (96 MiB / 120 ms while catching up), rather than 192 MiB / 250 ms
-(512 MiB / 1.5 s while catching up). This is an intentional visual trade-off:
-some dynamically indexed textures can appear later while their upload queue
-drains. Override these limits with `VICTORY_HEAP_TEXTURES_MB`,
-`VICTORY_HEAP_TEXTURES_MS`, `VICTORY_HEAP_TEXTURES_CATCHUP_MB` and
-`VICTORY_HEAP_TEXTURES_CATCHUP_MS`; set `VICTORY_TEXTURE_NO_WAIT=0` to restore
-blocking texture refreshes.
+the title remaps memory. This experimental branch uses a more aggressive
+bindless texture upload budget of 24 MiB / 30 ms per frame (48 MiB / 60 ms
+while catching up), rather than the less aggressive 48 MiB / 60 ms (96 MiB /
+120 ms while catching up). Some dynamically indexed textures can appear later
+while their upload queue drains. Override these limits with
+`VICTORY_HEAP_TEXTURES_MB`, `VICTORY_HEAP_TEXTURES_MS`,
+`VICTORY_HEAP_TEXTURES_CATCHUP_MB` and `VICTORY_HEAP_TEXTURES_CATCHUP_MS`;
+set `VICTORY_TEXTURE_NO_WAIT=0` to restore blocking texture refreshes.
+
+This branch also defaults `VICTORY_UNWATCHED_FRAMES` to 2 in performance mode:
+ranges that cannot be write-watched are refreshed every other frame, saving
+whole-buffer copies at the cost of up to one frame of stale streamed geometry.
+Set `VICTORY_UNWATCHED_FRAMES=1` to retain per-frame refreshes.
 
 Each corresponding `VICTORY_*` setting can override the preset explicitly;
 for example, set `VICTORY_WIDE_BACK=0` to turn off only that part. This preset
