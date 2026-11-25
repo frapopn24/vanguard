@@ -3408,4 +3408,45 @@ mod pending_range_tests {
         assert!(!pending.insert(range));
         assert_eq!(pending.covered.get(&64).unwrap().references, 1);
     }
+
+    #[test]
+    fn incremental_coverage_matches_live_exact_declarations() {
+        let declarations = [
+            (10, 35),
+            (20, 55),
+            (55, 72),
+            (15, 45),
+            (80, 100),
+        ];
+        let mut pending = PendingRanges::default();
+        let mut live = Vec::new();
+
+        for range in declarations {
+            assert!(pending.insert(range));
+            pending.adjust_coverage(range, true);
+            live.push(range);
+        }
+
+        let check = |pending: &PendingRanges, live: &[(usize, usize)]| {
+            for point in 0..110 {
+                let expected = live
+                    .iter()
+                    .filter(|&&(start, end)| start <= point && point < end)
+                    .count();
+                let actual = pending
+                    .covered
+                    .range(..=point)
+                    .next_back()
+                    .filter(|(_, segment)| point < segment.end)
+                    .map_or(0, |(_, segment)| segment.references);
+                assert_eq!(actual, expected, "coverage at byte {point}");
+            }
+        };
+
+        check(&pending, &live);
+        let retired = [declarations[1], declarations[3], declarations[4]];
+        pending.remove(&retired, (0, usize::MAX));
+        live.retain(|range| !retired.contains(range));
+        check(&pending, &live);
+    }
 }
