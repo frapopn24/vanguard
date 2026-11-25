@@ -60,6 +60,7 @@ Contributions are welcome. Please read [CONTRIBUTING.md](CONTRIBUTING.md) and ch
 - **Upstream base:** [JoshuuDev/victory-amd](https://github.com/JoshuuDev/victory-amd)
 - **Original VIctory project:** [Marvisak/VIctory](https://github.com/Marvisak/VIctory)
 - **Team workstreams:** [docs/TEAM_TASKS.md](docs/TEAM_TASKS.md)
+- **Windows startup and diagnostics:** [docs/STARTUP.md](docs/STARTUP.md)
 - **Contribution guide:** [CONTRIBUTING.md](CONTRIBUTING.md)
 
 ## Credits and relationship to upstream
