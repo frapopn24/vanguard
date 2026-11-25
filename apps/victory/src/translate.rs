@@ -1,7 +1,7 @@
 //! The offline batch: every shader found goes through the translator, and
 //! what it cannot handle yet is tallied (decision 0003).
 
-use std::collections::{BTreeMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -329,6 +329,7 @@ pub fn preload(
     let started = std::time::Instant::now();
     let seen = Mutex::new(HashSet::new());
     let failures = Mutex::new(BTreeMap::<String, usize>::new());
+    let failed_hashes = Mutex::new(BTreeSet::<String>::new());
     let files = AtomicUsize::new(0);
     let files_too_large = AtomicUsize::new(0);
     let files_unreadable = AtomicUsize::new(0);
@@ -421,7 +422,7 @@ pub fn preload(
                                 note_failure("container has no DXIL part");
                                 continue;
                             };
-                            if !lock(&seen).insert(blake3::hash(dxil)) {
+                            if !lock(&seen).insert(blake3::hash(bytes)) {
                                 duplicates.fetch_add(1, Ordering::Relaxed);
                                 continue;
                             }
@@ -433,6 +434,7 @@ pub fn preload(
                                     continue;
                                 }
                             };
+                            let shader_hash = blake3::hash(bytes).to_hex()[..16].to_owned();
                             let stage = programs.iter().find_map(|program| match program.stage {
                                 HwStage::Vs => Some((0usize, "vertex")),
                                 HwStage::Ps => Some((1usize, "pixel")),
@@ -508,7 +510,7 @@ pub fn preload(
     let _ = writeln!(report, "bytes_scanned       {}", bytes_scanned.load(Ordering::Relaxed));
     let _ = writeln!(report, "shader_records      {}", records.load(Ordering::Relaxed));
     let _ = writeln!(report, "containers_parsed   {}", containers.load(Ordering::Relaxed));
-    let _ = writeln!(report, "duplicate_programs  {}", duplicates.load(Ordering::Relaxed));
+    let _ = writeln!(report, "duplicate_containers  {}", duplicates.load(Ordering::Relaxed));
     let _ = writeln!(report, "corrupt_records     {}", corrupt_records.load(Ordering::Relaxed));
     let _ = writeln!(report, "malformed_containers {}", malformed_containers.load(Ordering::Relaxed));
     let _ = writeln!(report, "without_dxil        {}", without_dxil.load(Ordering::Relaxed));
