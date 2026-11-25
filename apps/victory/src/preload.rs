@@ -68,7 +68,7 @@ fn tree_stats(root: &Path) -> (usize, u64) {
     }
     let mut files = 0usize;
     let mut bytes = 0u64;
-    for entry in walkdir::WalkDir::new(root).into_iter().filter_map(Result::ok) {
+    for entry in walkdir::WalkDir::new(root).into_iter().filter_map(|entry| entry.ok()) {
         if entry.file_type().is_file() {
             files += 1;
             bytes = bytes.saturating_add(entry.metadata().map_or(0, |m| m.len()));
