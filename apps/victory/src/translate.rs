@@ -307,6 +307,11 @@ pub fn run(
 }
 
 /// `victory warm`: fills the caches a run reads (`Command::Warm`).
+fn record_preload_failure(failures: &Mutex<BTreeMap<String, usize>>, reason: &str) {
+    let mut map = failures.lock().unwrap_or_else(|e| e.into_inner());
+    *map.entry(reason.to_owned()).or_default() += 1;
+}
+
 /// Scan the title's shader containers, populate the translated-shader cache, and
 /// optionally create compute PSOs in the host pipeline library.
 pub fn preload(
@@ -350,11 +355,6 @@ pub fn preload(
     let compute_refused = AtomicUsize::new(0);
     let compute_left_out = AtomicUsize::new(0);
 
-    let note_failure = |reason: &str| {
-        let mut map = failures.lock().unwrap_or_else(|e| e.into_inner());
-        *map.entry(reason.to_owned()).or_default() += 1;
-    };
-
     println!("VANGUARD PRELOAD");
     println!("cache            {}", cfg.cache_dir.display());
     println!("workers          {threads}");
@@ -397,14 +397,14 @@ pub fn preload(
                         while let Some(source) = sources.get(next.fetch_add(1, Ordering::Relaxed)) {
                             let Some(bytes) = source.bytes() else {
                                 corrupt_records.fetch_add(1, Ordering::Relaxed);
-                                note_failure("corrupt packed shader record");
+                                record_preload_failure(&failures, "corrupt packed shader record");
                                 continue;
                             };
                             let container = match Container::parse(&bytes) {
                                 Ok(container) => container,
                                 Err(_) => {
                                     malformed_containers.fetch_add(1, Ordering::Relaxed);
-                                    note_failure("invalid shader container");
+                                    record_preload_failure(&failures, "invalid shader container");
                                     continue;
                                 }
                             };
@@ -412,14 +412,14 @@ pub fn preload(
                             // Honour the container's own declared size; do not warm trailing data.
                             let Some(total) = bytes.get(0x18..0x1c).and_then(|b| b.try_into().ok()) else {
                                 malformed_containers.fetch_add(1, Ordering::Relaxed);
-                                note_failure("missing container length");
+                                record_preload_failure(&failures, "missing container length");
                                 continue;
                             };
                             let total = u32::from_le_bytes(total) as usize;
                             let bytes = &bytes[..total.min(bytes.len())];
                             let Some(dxil) = container.part(FourCC::DXIL).map(|part| part.data) else {
                                 without_dxil.fetch_add(1, Ordering::Relaxed);
-                                note_failure("container has no DXIL part");
+                                record_preload_failure(&failures, "container has no DXIL part");
                                 continue;
                             };
                             if !lock(&seen).insert(blake3::hash(bytes)) {
@@ -430,7 +430,7 @@ pub fn preload(
                                 Ok(programs) => programs,
                                 Err(_) => {
                                     native_errors.fetch_add(1, Ordering::Relaxed);
-                                    note_failure("native shader program could not be decoded");
+                                    record_preload_failure(&failures, "native shader program could not be decoded");
                                     continue;
                                 }
                             };
@@ -444,7 +444,7 @@ pub fn preload(
                             });
                             let Some((index, stage_name)) = stage else {
                                 unsupported_stages.fetch_add(1, Ordering::Relaxed);
-                                note_failure("no supported vertex, pixel, mesh or compute stage");
+                                record_preload_failure(&failures, "no supported vertex, pixel, mesh or compute stage");
                                 failed_hashes.lock().unwrap_or_else(|e| e.into_inner()).insert(format!("unsupported {shader_hash}"));
                                 continue;
                             };
@@ -459,7 +459,7 @@ pub fn preload(
                                 translated[index].fetch_add(1, Ordering::Relaxed);
                             } else {
                                 refused[index].fetch_add(1, Ordering::Relaxed);
-                                note_failure(&format!("{stage_name} shader translation refused"));
+                                record_preload_failure(&failures, &format!("{stage_name} shader translation refused"));
                                 failed_hashes.lock().unwrap_or_else(|e| e.into_inner()).insert(format!("{stage_name} {shader_hash}"));
                             }
                             if make_compute && ok {
@@ -469,12 +469,12 @@ pub fn preload(
                                     }
                                     Some(false) => {
                                         compute_refused.fetch_add(1, Ordering::Relaxed);
-                                        note_failure("compute PSO creation refused");
+                                        record_preload_failure(&failures, "compute PSO creation refused");
                                         failed_hashes.lock().unwrap_or_else(|e| e.into_inner()).insert(format!("compute-PSO {shader_hash}"));
                                     }
                                     None => {
                                         compute_left_out.fetch_add(1, Ordering::Relaxed);
-                                        note_failure("compute PSO left out by runtime policy");
+                                        record_preload_failure(&failures, "compute PSO left out by runtime policy");
                                         failed_hashes.lock().unwrap_or_else(|e| e.into_inner()).insert(format!("compute-left-out {shader_hash}"));
                                     }
                                 }
