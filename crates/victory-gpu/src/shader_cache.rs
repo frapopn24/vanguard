@@ -44,7 +44,20 @@ pub(crate) fn counts() -> (u64, u64) {
 /// and what the host's device said).
 fn build() -> &'static [u8; 32] {
     static BUILD: OnceLock<[u8; 32]> = OnceLock::new();
-    BUILD.get_or_init(|| {
+    BUILD.get_or_init(|| fingerprint(std::env::var_os("VICTORY_WAVE_WIDE")))
+}
+
+/// The build as if `VICTORY_WAVE_WIDE` were unset: the key of a shader kept off the
+/// last-resort wave-wide form ([`wide_last_allowed`]), whose translation is then the same as
+/// without the switch (`last` changes nothing else), so it shares that run's cache entries.
+fn build_without_wide() -> &'static [u8; 32] {
+    static BUILD: OnceLock<[u8; 32]> = OnceLock::new();
+    BUILD.get_or_init(|| fingerprint(None))
+}
+
+/// [`build`] with `wide` as the value of `VICTORY_WAVE_WIDE`.
+fn fingerprint(wide: Option<std::ffi::OsString>) -> [u8; 32] {
+    {
         let limit = victory_shader::emit::loop_limit();
         if limit != victory_shader::emit::DEFAULT_LOOP_LIMIT {
             tracing::warn!(
@@ -84,23 +97,63 @@ fn build() -> &'static [u8; 32] {
         ] {
             hash.update(name.as_bytes());
             hash.update(b"=");
-            if let Some(value) = std::env::var_os(name) {
+            // (`VICTORY_WAVE_WIDE_ONLY` / `_SKIP` are not: they pick, per shader,
+            // between this key and `build_without_wide`'s.)
+            let value = if name == "VICTORY_WAVE_WIDE" { wide.clone() } else { std::env::var_os(name) };
+            if let Some(value) = value {
                 hash.update(value.as_encoded_bytes());
             }
             hash.update(&[0]);
         }
         *hash.finalize().as_bytes()
-    })
+    }
 }
 
 /// The translation of a console shader container, from the cache when
 /// there is one.
 pub(crate) fn host_shader(container: &[u8]) -> Result<HostShader, String> {
-    let translate = |c: &[u8]| victory_shader::emit::translate(c).map_err(|e| e.to_string());
+    let last = std::env::var_os("VICTORY_WAVE_WIDE").is_some_and(|v| v == "last");
+    let allowed = !last || wide_last_allowed(container);
+    let translate = |c: &[u8]| {
+        let run = || victory_shader::emit::translate(c).map_err(|e| e.to_string());
+        if allowed { run() } else { victory_shader::emit::without_wide_last(run) }
+    };
+    let key = if allowed { build() } else { build_without_wide() };
     match CACHE.get() {
-        Some(cache) => cached(cache, build(), container, translate),
+        Some(cache) => cached(cache, key, container, translate),
         None => translate(container),
     }
+}
+
+/// With `VICTORY_WAVE_WIDE=last`, whether this shader may take the last-resort wave-wide
+/// form; one kept off it is translated as without the switch. By the 16-digit hash the
+/// logs name shaders with:
+/// - `VICTORY_WAVE_WIDE_ONLY=<hash>,...`: only these may (unset: every shader);
+/// - `VICTORY_WAVE_WIDE_SKIP=<hash>,...`: these may not (a program found to give wrong
+///   results in that form).
+fn wide_last_allowed(container: &[u8]) -> bool {
+    static LISTS: OnceLock<(Option<Vec<String>>, Vec<String>)> = OnceLock::new();
+    let (only, skip) = LISTS.get_or_init(|| {
+        let list = |name| std::env::var(name).ok().map(|v| parse_hashes(&v));
+        (list("VICTORY_WAVE_WIDE_ONLY"), list("VICTORY_WAVE_WIDE_SKIP").unwrap_or_default())
+    });
+    let hash = blake3::hash(container).to_hex()[..16].to_owned();
+    allowed_by(only.as_deref(), skip, &hash)
+}
+
+/// [`wide_last_allowed`]'s rule for one hash.
+fn allowed_by(only: Option<&[String]>, skip: &[String], hash: &str) -> bool {
+    only.is_none_or(|only| only.iter().any(|h| h == hash)) && !skip.iter().any(|h| h == hash)
+}
+
+/// Comma-separated 16-digit hashes, lower case; anything else is left out.
+fn parse_hashes(value: &str) -> Vec<String> {
+    value
+        .split(',')
+        .map(str::trim)
+        .filter(|h| h.len() == 16 && h.bytes().all(|b| b.is_ascii_hexdigit()))
+        .map(str::to_ascii_lowercase)
+        .collect()
 }
 
 /// The cache entry's converter: the build and the container in, the
@@ -332,6 +385,31 @@ fn decode(bytes: &[u8]) -> Option<HostShader> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn wide_only_hashes_are_sixteen_hex_digits() {
+        assert_eq!(
+            parse_hashes(" 2CC4C197EE29E291, 369cbe906ea72764,short,,zz00000000000000"),
+            ["2cc4c197ee29e291", "369cbe906ea72764"]
+        );
+    }
+
+    #[test]
+    fn wide_last_takes_the_only_list_then_leaves_out_the_skip_list() {
+        let (a, b) = ("2cc4c197ee29e291".to_owned(), "369cbe906ea72764".to_owned());
+        assert!(allowed_by(None, &[], &a));
+        assert!(allowed_by(None, std::slice::from_ref(&b), &a));
+        assert!(!allowed_by(None, std::slice::from_ref(&b), &b));
+        assert!(allowed_by(Some(std::slice::from_ref(&a)), &[], &a));
+        assert!(!allowed_by(Some(std::slice::from_ref(&a)), &[], &b));
+        assert!(!allowed_by(Some(&[a.clone(), b.clone()]), std::slice::from_ref(&b), &b));
+    }
+
+    #[test]
+    fn a_shader_kept_off_wide_last_shares_the_key_of_a_run_without_the_switch() {
+        assert_eq!(fingerprint(None), fingerprint(None));
+        assert_ne!(fingerprint(None), fingerprint(Some("last".into())));
+    }
 
     fn shader() -> HostShader {
         HostShader {

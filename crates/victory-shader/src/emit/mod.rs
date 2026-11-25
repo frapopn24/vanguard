@@ -268,6 +268,21 @@ pub struct UserData {
     pub dword: u32,
 }
 
+thread_local! {
+    /// See [`without_wide_last`].
+    static WIDE_LAST_HELD: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// Runs `f` (a translation) with `VICTORY_WAVE_WIDE=last` held back: the caller's way of
+/// keeping a program off that form (`VICTORY_WAVE_WIDE_ONLY` in `victory-gpu`, which knows
+/// the program by its hash).
+pub fn without_wide_last<R>(f: impl FnOnce() -> R) -> R {
+    let was = WIDE_LAST_HELD.replace(true);
+    let r = f();
+    WIDE_LAST_HELD.set(was);
+    r
+}
+
 /// Translates the vertex, pixel, compute or mesh program of a console
 /// shader container.
 pub fn translate(container: &[u8]) -> Result<HostShader, ShaderError> {
@@ -380,6 +395,12 @@ pub fn emit(
         // (`ptfx_CS_lightAtlas_Sprite` and `_Trail`). The 32-lane programs' form below, which
         // has no barrier, stays on.
         let wide_on = std::env::var_os("VICTORY_WAVE_WIDE").is_some_and(|v| v == "1");
+        // `VICTORY_WAVE_WIDE=last`: the same form, but only for a program that every form
+        // below leaves with 64-lane waves, which a 32-lane host refuses (its draws were
+        // dropped anyway). Programs another form gives 32-lane waves, the light-atlas ones
+        // among them, keep that form.
+        let wide_last = std::env::var_os("VICTORY_WAVE_WIDE").is_some_and(|v| v == "last")
+            && !WIDE_LAST_HELD.get();
         // exact first: each host wave on its own where that is exact (the idiom, every
         // form; no barriers), then the other exact forms; then approximate
         for exact in [true, false] {
@@ -458,6 +479,16 @@ pub fn emit(
                 report("local waves (APPROXIMATE, any mask)", &local);
                 if done(&local) {
                     return local.map(|(shader, _)| shader);
+                }
+            }
+        }
+        if wide_last {
+            let bases = [forms[1].1.as_ref().map(|f| &f.0), forms[0].1.as_ref().map(|f| &f.0), Some(p)];
+            for base in bases.into_iter().flatten() {
+                let again = widen(c, native, base, why);
+                report("wave-wide branches, last", &again);
+                if done(&again) {
+                    return again.map(|(shader, _)| shader);
                 }
             }
         }
