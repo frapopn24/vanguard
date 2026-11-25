@@ -445,6 +445,7 @@ pub fn preload(
                             let Some((index, stage_name)) = stage else {
                                 unsupported_stages.fetch_add(1, Ordering::Relaxed);
                                 note_failure("no supported vertex, pixel, mesh or compute stage");
+                                failed_hashes.lock().unwrap_or_else(|e| e.into_inner()).insert(format!("unsupported {shader_hash}"));
                                 continue;
                             };
 
@@ -459,6 +460,7 @@ pub fn preload(
                             } else {
                                 refused[index].fetch_add(1, Ordering::Relaxed);
                                 note_failure(&format!("{stage_name} shader translation refused"));
+                                failed_hashes.lock().unwrap_or_else(|e| e.into_inner()).insert(format!("{stage_name} {shader_hash}"));
                             }
                             if make_compute && ok {
                                 match pipeline {
@@ -468,10 +470,12 @@ pub fn preload(
                                     Some(false) => {
                                         compute_refused.fetch_add(1, Ordering::Relaxed);
                                         note_failure("compute PSO creation refused");
+                                        failed_hashes.lock().unwrap_or_else(|e| e.into_inner()).insert(format!("compute-PSO {shader_hash}"));
                                     }
                                     None => {
                                         compute_left_out.fetch_add(1, Ordering::Relaxed);
                                         note_failure("compute PSO left out by runtime policy");
+                                        failed_hashes.lock().unwrap_or_else(|e| e.into_inner()).insert(format!("compute-left-out {shader_hash}"));
                                     }
                                 }
                             }
@@ -544,6 +548,12 @@ pub fn preload(
     let _ = writeln!(report, "Graphics PSOs require the title's complete root signature, render-target formats");
     let _ = writeln!(report, "and fixed-function state. Learned graphics keys are started early when the title");
     let _ = writeln!(report, "recreates their matching pipeline objects; shader-only offline scan cannot invent them.");
+    let _ = writeln!(report, "");
+    let _ = writeln!(report, "FAILED SHADER HASHES");
+    let failed_hashes = failed_hashes.into_inner().unwrap_or_else(|e| e.into_inner());
+    for item in failed_hashes.iter().take(200) {
+        let _ = writeln!(report, "{item}");
+    }
     let _ = writeln!(report, "");
     let _ = writeln!(report, "FAILURES");
     let mut failures = failures.into_inner().unwrap_or_else(|e| e.into_inner()).into_iter().collect::<Vec<_>>();
