@@ -65,7 +65,11 @@ impl PendingRanges {
         }
         self.split_at(start);
         self.split_at(end);
-        let keys: Vec<usize> = self.covered.range(start..end).map(|(&at, _)| at).collect();
+        let keys: Vec<usize> = self
+            .covered
+            .range(start..end)
+            .map(|(&at, _)| at)
+            .collect();
         if add {
             let mut at = start;
             for key in keys {
@@ -156,7 +160,10 @@ impl PendingRanges {
         for &range in ranges {
             if self.exact.remove(&range) {
                 self.adjust_coverage(
-                    (range.0.max(bounds.0), range.1.min(bounds.1)),
+                    (
+                        range.0.max(bounds.0),
+                        range.1.min(bounds.1),
+                    ),
                     false,
                 );
             }
@@ -2260,9 +2267,15 @@ impl Shadow {
         let mut pending = self.pending.lock().unwrap_or_else(|e| e.into_inner());
         if relay() {
             let free = self.flights.lock().unwrap_or_else(|e| e.into_inner()).done(ranges);
-            pending.remove(&free, (self.start as usize, (self.start + self.len) as usize));
+            pending.remove(
+                &free,
+                (self.start as usize, (self.start + self.len) as usize),
+            );
         } else {
-            pending.remove(ranges, (self.start as usize, (self.start + self.len) as usize));
+            pending.remove(
+                ranges,
+                (self.start as usize, (self.start + self.len) as usize),
+            );
         }
         if !pending.is_empty() || self.card.is_some() {
             return;
@@ -2341,7 +2354,11 @@ impl Shadow {
         if from >= to {
             return false;
         }
-        let busy = self.pending.lock().unwrap_or_else(|e| e.into_inner()).intersections(from, to);
+        let busy = self
+            .pending
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .intersections(from, to);
         if busy.is_empty() {
             return false;
         }
@@ -2380,7 +2397,11 @@ impl Shadow {
         if from >= to {
             return false;
         }
-        let busy = self.pending.lock().unwrap_or_else(|e| e.into_inner()).intersections(from, to);
+        let busy = self
+            .pending
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .intersections(from, to);
         if busy.is_empty() {
             return false;
         }
@@ -2491,7 +2512,11 @@ impl Shadow {
         if from >= to {
             return 0;
         }
-        let busy = self.pending.lock().unwrap_or_else(|e| e.into_inner()).intersections(from, to);
+        let busy = self
+            .pending
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .intersections(from, to);
         if !busy.is_empty() {
             // Around ranges shaders are writing: the gaps, each as below
             // (in the world most submissions have such ranges; copying the
@@ -3327,7 +3352,11 @@ mod pending_range_tests {
         assert!(pending.insert(second));
         pending.adjust_coverage(second, true);
         assert_eq!(
-            pending.covered.iter().map(|(&start, segment)| (start, segment.end, segment.references)).collect::<Vec<_>>(),
+            pending
+                .covered
+                .iter()
+                .map(|(&start, segment)| (start, segment.end, segment.references))
+                .collect::<Vec<_>>(),
             vec![(100, 110, 1), (110, 120, 2), (120, 130, 1)]
         );
         assert!(!pending.insert(second));
