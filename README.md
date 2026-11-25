@@ -189,8 +189,9 @@ Each is described in a comment where it is read.
 - A few style lints are switched off for this fork in the workspace `Cargo.toml` until the newer code is tidied.
 - Many changes here are specific to this title and this GPU, and some are marked `shortcut:` in the code where they approximate what the console does.
 
-Everything below this line is upstream VIctory's own README, unchanged; its
-status section describes upstream, not this fork.
+The upstream VIctory README material below is retained for reference; its
+status section describes upstream, not this fork. The PowerShell launch example
+is adapted here to require the title executable's explicit path.
 
 ---
 
@@ -262,7 +263,10 @@ Run the title from the repository root. The executable argument must be the full
 
 ```powershell
 cargo build --release -p victory
-$gameExe = Read-Host "Full path to the title executable"
+$gameExe = (Read-Host "Full path to the title executable").Trim().Trim('"')
+if (-not [System.IO.Path]::IsPathRooted($gameExe)) {
+    throw "Please enter an absolute path to the executable."
+}
 if (-not (Test-Path -LiteralPath $gameExe -PathType Leaf)) {
     throw "Executable not found: $gameExe"
 }
