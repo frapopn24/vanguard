@@ -202,6 +202,36 @@ impl GraphicsState {
         )
     }
 
+    /// The blend description the host is given: blending turned off for
+    /// render targets of integer formats. The console's colour blocks do not
+    /// blend integer targets and write the shader's value as it is, so a
+    /// title may leave blending on for them; D3D12 refuses such a pipeline
+    /// (debug layer message 676, "this format does not support blending").
+    /// With one description for every target (`IndependentBlendEnable`
+    /// off) the first target's is copied to each before any is changed.
+    fn host_blend(&self) -> D3D12_BLEND_DESC {
+        let mut blend = self.blend;
+        let count = (self.targets.NumRenderTargets as usize).min(8);
+        let integer = |i: usize| is_integer_format(self.targets.RTFormats[i]);
+        let first = blend.RenderTarget[0];
+        let shared = !blend.IndependentBlendEnable.as_bool();
+        let blends = |i: usize| {
+            let t = if shared { &first } else { &blend.RenderTarget[i] };
+            t.BlendEnable.as_bool()
+        };
+        if !(0..count).any(|i| integer(i) && blends(i)) {
+            return blend;
+        }
+        if shared {
+            blend.RenderTarget = [first; 8];
+            blend.IndependentBlendEnable = true.into();
+        }
+        for i in (0..count).filter(|&i| integer(i)) {
+            blend.RenderTarget[i].BlendEnable = false.into();
+        }
+        blend
+    }
+
     /// The vertex buffer slots the input layout reads.
     fn slots(&self) -> u32 {
         self.inputs
@@ -605,7 +635,7 @@ impl HostPipeline {
                     BytecodeLength: gs.len(),
                 }
             }),
-            BlendState: g.blend,
+            BlendState: g.host_blend(),
             SampleMask: g.sample_mask,
             RasterizerState: g.rasterizer,
             DepthStencilState: g.depth,
@@ -723,6 +753,35 @@ impl HostPipeline {
     }
 }
 
+/// Whether a render target format holds integers (`_UINT` / `_SINT`), which
+/// D3D12 does not blend.
+fn is_integer_format(f: DXGI_FORMAT) -> bool {
+    matches!(
+        f,
+        DXGI_FORMAT_R32G32B32A32_UINT
+            | DXGI_FORMAT_R32G32B32A32_SINT
+            | DXGI_FORMAT_R32G32B32_UINT
+            | DXGI_FORMAT_R32G32B32_SINT
+            | DXGI_FORMAT_R16G16B16A16_UINT
+            | DXGI_FORMAT_R16G16B16A16_SINT
+            | DXGI_FORMAT_R32G32_UINT
+            | DXGI_FORMAT_R32G32_SINT
+            | DXGI_FORMAT_R10G10B10A2_UINT
+            | DXGI_FORMAT_R8G8B8A8_UINT
+            | DXGI_FORMAT_R8G8B8A8_SINT
+            | DXGI_FORMAT_R16G16_UINT
+            | DXGI_FORMAT_R16G16_SINT
+            | DXGI_FORMAT_R32_UINT
+            | DXGI_FORMAT_R32_SINT
+            | DXGI_FORMAT_R8G8_UINT
+            | DXGI_FORMAT_R8G8_SINT
+            | DXGI_FORMAT_R16_UINT
+            | DXGI_FORMAT_R16_SINT
+            | DXGI_FORMAT_R8_UINT
+            | DXGI_FORMAT_R8_SINT
+    )
+}
+
 /// A mesh pipeline from the title's graphics state: the pipeline-state
 /// stream form (no input layout).
 ///
@@ -764,7 +823,7 @@ fn mesh_pipeline(
         root: Sub(D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_ROOT_SIGNATURE, root.as_raw()),
         ms: Sub(D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_MS, ms),
         ps: Sub(D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_PS, ps),
-        blend: Sub(D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_BLEND, g.blend),
+        blend: Sub(D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_BLEND, g.host_blend()),
         mask: Sub(D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_SAMPLE_MASK, g.sample_mask),
         raster: Sub(D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_RASTERIZER, g.rasterizer),
         depth: Sub(D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_DEPTH_STENCIL, g.depth),
@@ -851,7 +910,7 @@ fn bounds_pipeline(
             add(s, kind, code);
         }
     }
-    add(s, D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_BLEND, g.blend);
+    add(s, D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_BLEND, g.host_blend());
     add(s, D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_SAMPLE_MASK, g.sample_mask);
     add(s, D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_RASTERIZER, g.rasterizer);
     let d = &g.depth;
@@ -997,6 +1056,53 @@ mod tests {
             .unwrap();
         assert!(status.success(), "dxc failed for {profile}");
         std::fs::read(out).unwrap()
+    }
+
+    /// A state with these targets and blending on for every one through the
+    /// first target's description.
+    fn blending(formats: &[DXGI_FORMAT], independent: bool) -> GraphicsState {
+        let mut g = GraphicsState::default();
+        g.targets.NumRenderTargets = formats.len() as u32;
+        g.targets.RTFormats[..formats.len()].copy_from_slice(formats);
+        g.blend.IndependentBlendEnable = independent.into();
+        for t in &mut g.blend.RenderTarget {
+            t.BlendEnable = true.into();
+            t.SrcBlend = D3D12_BLEND_SRC_ALPHA;
+        }
+        g
+    }
+
+    #[test]
+    fn integer_targets_do_not_blend_on_the_host() {
+        let formats = [
+            DXGI_FORMAT_R8G8B8A8_UNORM,
+            DXGI_FORMAT_R16G16B16A16_FLOAT,
+            DXGI_FORMAT_R8_UINT,
+        ];
+        let g = blending(&formats, true);
+        let b = g.host_blend();
+        assert!(b.RenderTarget[0].BlendEnable.as_bool());
+        assert!(b.RenderTarget[1].BlendEnable.as_bool());
+        assert!(!b.RenderTarget[2].BlendEnable.as_bool());
+        assert_eq!(b.RenderTarget[2].SrcBlend, D3D12_BLEND_SRC_ALPHA);
+    }
+
+    #[test]
+    fn a_shared_description_becomes_one_per_target_when_an_integer_target_blends() {
+        let g = blending(&[DXGI_FORMAT_R8G8B8A8_UNORM, DXGI_FORMAT_R32_SINT], false);
+        let b = g.host_blend();
+        assert!(b.IndependentBlendEnable.as_bool());
+        assert!(b.RenderTarget[0].BlendEnable.as_bool());
+        assert!(!b.RenderTarget[1].BlendEnable.as_bool());
+    }
+
+    #[test]
+    fn blending_is_left_alone_without_integer_targets() {
+        let g = blending(&[DXGI_FORMAT_R8G8B8A8_UNORM, DXGI_FORMAT_R11G11B10_FLOAT], false);
+        let b = g.host_blend();
+        assert!(!b.IndependentBlendEnable.as_bool());
+        assert!(b.RenderTarget[0].BlendEnable.as_bool());
+        assert_eq!(format!("{:?}", b), format!("{:?}", g.blend));
     }
 
     fn code(bytes: &[u8]) -> D3D12_SHADER_BYTECODE {
