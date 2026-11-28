@@ -2615,6 +2615,10 @@ mod tests {
             extern "system" fn(This, *const Location, u32, u32, u32, *const Location, *const u8);
         slot::<Copy>(list, 0x80)(list, &to, 0, 0, 0, &from, null.cast());
         slot::<extern "system" fn(This) -> HRESULT>(list, 0x48)(list);
+        // The recording list holds the host copy. Check before submission:
+        // with the relay, a short upload may finish and release its detached
+        // state before the submitting thread reaches its next instruction.
+        assert!(std::sync::Arc::strong_count(&host_copy(image).unwrap()) > 2);
         slot::<extern "system" fn(This, u32, *const This)>(queue, 0x50)(queue, 1, &list);
 
         // Read the host texture back into a readback buffer.
@@ -2653,8 +2657,6 @@ mod tests {
         let host_image = host_resource(image).unwrap();
         let back = host.new_list().unwrap();
         let (_, before) = host_transition(image, 0x800).unwrap();
-        // The upload list holds the texture until it is reset.
-        assert!(std::sync::Arc::strong_count(&host_copy(image).unwrap()) > 2);
         use windows::core::Interface;
         let out_to = Location {
             resource: readback.as_raw().cast_const().cast(),
